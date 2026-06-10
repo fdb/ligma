@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
 const DOC_VERSION: u32 = 2;
@@ -24,6 +25,7 @@ pub enum NodeKind {
     Rect,
     Ellipse,
     Text,
+    Image,
 }
 
 /// A single fill or stroke: a color with its own opacity.
@@ -105,6 +107,10 @@ pub struct Node {
     pub corner_radius: f64,
     pub text: String,
     pub font_size: f64,
+    /// Content hash of an uploaded asset (image nodes only); the bytes
+    /// live in R2 and the browser keeps decoded elements in a JS cache.
+    #[serde(default)]
+    pub image: String,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -390,6 +396,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             corner_radius: n.corner_radius,
             text: n.text,
             font_size: n.font_size,
+            image: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -1095,6 +1102,7 @@ impl Engine {
             corner_radius: 0.0,
             text: String::new(),
             font_size: 16.0,
+            image: String::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -1260,6 +1268,21 @@ impl Engine {
         recompute_group_bounds(&mut self.nodes);
         self.selection = new_ids;
         self.touch();
+    }
+
+    /// Places an uploaded image as a new node (world coordinates) and
+    /// selects it.
+    pub fn add_image(&mut self, hash: &str, x: f64, y: f64, w: f64, h: f64) -> u32 {
+        self.snapshot_now();
+        let id = self.add_node(NodeKind::Image, x, y, w.max(1.0), h.max(1.0));
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.image = hash.to_string();
+            n.fills.clear(); // the bitmap is the fill
+            round_subtree(n);
+        }
+        self.selection = vec![id];
+        self.touch();
+        id
     }
 
     // ----- clipboard & z-order -----
@@ -1689,6 +1712,7 @@ impl Engine {
             NodeKind::Rect => (format!("Rectangle {count}"), "#d4d4d8"),
             NodeKind::Ellipse => (format!("Ellipse {count}"), "#d4d4d8"),
             NodeKind::Text => (format!("Text {count}"), "#18181b"),
+            NodeKind::Image => (format!("Image {count}"), "#f4f4f5"),
         };
         self.nodes.push(Node {
             id,
@@ -1708,6 +1732,7 @@ impl Engine {
             corner_radius: 0.0,
             text: if kind == NodeKind::Text { "Text".to_string() } else { String::new() },
             font_size: 16.0,
+            image: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -1822,6 +1847,36 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
                 let _ = ctx.stroke_text(&n.text, n.x, ty);
             }
         }
+        NodeKind::Image => {
+            // Decoded bitmaps live in a JS-side cache the app fills as
+            // assets stream in; until then draw a loading placeholder.
+            ctx.set_global_alpha(alpha);
+            let el = web_sys::window()
+                .and_then(|w| js_sys::Reflect::get(&w, &"__ligmaImages".into()).ok())
+                .and_then(|m| js_sys::Reflect::get(&m, &n.image.as_str().into()).ok())
+                .and_then(|v| v.dyn_into::<web_sys::HtmlImageElement>().ok());
+            match el {
+                Some(img) => {
+                    let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                        &img, n.x, n.y, n.w, n.h,
+                    );
+                }
+                None => {
+                    ctx.set_fill_style_str("#f4f4f5");
+                    ctx.fill_rect(n.x, n.y, n.w, n.h);
+                    ctx.set_stroke_style_str("#d4d4d8");
+                    ctx.set_line_width(1.0 / zoom);
+                    ctx.stroke_rect(n.x, n.y, n.w, n.h);
+                    ctx.begin_path();
+                    ctx.move_to(n.x, n.y);
+                    ctx.line_to(n.x + n.w, n.y + n.h);
+                    ctx.stroke();
+                }
+            }
+            stroke_paints(ctx, n, alpha, |ctx| {
+                rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+            });
+        }
     }
     ctx.set_global_alpha(1.0);
     if blended {
@@ -1934,6 +1989,18 @@ fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
                 out.push_str(&format!(
                     r#"<text x="{x}" y="{ty}" font-family="Hanken Grotesk, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
                     n.font_size, xml_escape(&p.color), p.opacity, xml_escape(&n.text)
+                ));
+            }
+        }
+        NodeKind::Image => {
+            out.push_str(&format!(
+                r#"<image x="{x}" y="{y}" width="{}" height="{}" href="/api/assets/{}" preserveAspectRatio="none"/>"#,
+                n.w, n.h, xml_escape(&n.image)
+            ));
+            for p in &n.strokes {
+                out.push_str(&format!(
+                    r#"<rect x="{x}" y="{y}" width="{}" height="{}" fill="none" stroke="{}" stroke-opacity="{}" stroke-width="{}"/>"#,
+                    n.w, n.h, xml_escape(&p.color), p.opacity, n.stroke_weight
                 ));
             }
         }

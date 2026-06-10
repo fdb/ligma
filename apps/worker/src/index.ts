@@ -187,6 +187,41 @@ app.patch("/api/documents/:id", async (c) => {
   return c.body(null, 204);
 });
 
+const ASSET_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_ASSET_BYTES = 8 * 1024 * 1024;
+
+// Image assets are content-addressed: the id is a hash of the bytes, so
+// re-uploading the same image (in any document) dedupes in R2.
+app.post("/api/assets", async (c) => {
+  const type = c.req.header("Content-Type") ?? "";
+  if (!ASSET_TYPES.includes(type)) return c.text("unsupported image type", 415);
+  const bytes = await c.req.arrayBuffer();
+  if (bytes.byteLength === 0) return c.text("empty body", 400);
+  if (bytes.byteLength > MAX_ASSET_BYTES) return c.text("image too large", 413);
+
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hash = [...new Uint8Array(digest)]
+    .slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  await c.env.DOCS.put(`assets/${hash}`, bytes, {
+    httpMetadata: { contentType: type },
+  });
+  return c.json({ hash }, 201);
+});
+
+app.get("/api/assets/:hash", async (c) => {
+  const hash = c.req.param("hash");
+  if (!/^[0-9a-f]{32}$/.test(hash)) return c.text("invalid asset id", 400);
+  const obj = await c.env.DOCS.get(`assets/${hash}`);
+  if (!obj) return c.text("not found", 404);
+  return c.body(obj.body, 200, {
+    "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+    // Content-addressed: safe to cache forever.
+    "Cache-Control": "public, max-age=31536000, immutable",
+  });
+});
+
 // Presence WebSocket: forwarded straight to the document's Durable Object.
 app.get("/api/documents/:id/ws", async (c) => {
   const id = c.req.param("id");

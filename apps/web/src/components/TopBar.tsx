@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { Engine } from "../engine/pkg/ligma_core";
+import { placementSize, uploadImage } from "../lib/images";
 import type { Scene, Tool } from "../types";
 import { Icon } from "./Icon";
 import { MenuBar, type Menu } from "./MenuBar";
@@ -37,9 +39,20 @@ export function TopBar({
   viewport,
 }: Props) {
   const navigate = useNavigate();
+  const fileInput = useRef<HTMLInputElement>(null);
   const zoomAroundCenter = (zoom: number) => {
     const { w, h } = viewport();
     engine.set_zoom(zoom, w / 2, h / 2);
+  };
+
+  const placeImage = async (file: File) => {
+    const up = await uploadImage(file);
+    if (!up) return;
+    const { w, h } = placementSize(up.width, up.height);
+    const vp = viewport();
+    const wx = (vp.w / 2 - scene.panX) / scene.zoom - w / 2;
+    const wy = (vp.h / 2 - scene.panY) / scene.zoom - h / 2;
+    engine.add_image(up.hash, wx, wy, w, h);
   };
 
   const single = scene.selection.length === 1;
@@ -62,6 +75,7 @@ export function TopBar({
             navigate({ to: "/d/$docId", params: { docId: id } });
           },
         },
+        { label: "Place image…", action: () => fileInput.current?.click() },
         { label: "Save", shortcut: "⌘S", action: onSave },
       ],
     },
@@ -181,6 +195,18 @@ export function TopBar({
 
   return (
     <header className="relative z-10 flex h-12 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-3">
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        data-testid="image-input"
+        onChange={(e) => {
+          const file = e.currentTarget.files?.[0];
+          if (file) placeImage(file);
+          e.currentTarget.value = "";
+        }}
+      />
       <div className="flex items-center gap-2.5">
         <Link
           to="/"

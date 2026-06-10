@@ -11,6 +11,13 @@ const paths: Record<string, React.ReactNode> = {
   hand: (
     <path d="M5.2 8.4V4.6a1.1 1.1 0 0 1 2.2 0V8m0-3.9V3a1.1 1.1 0 0 1 2.2 0v5m0-3.6a1.1 1.1 0 0 1 2.2 0v5.2c0 2.9-1.7 4.6-4.1 4.6-2 0-3-.9-4-2.8L2.6 9.7c-.5-.9.7-1.7 1.4-1l1.2 1.3" />
   ),
+  image: (
+    <>
+      <rect x="2.5" y="3" width="11" height="10" rx="1" />
+      <circle cx="6" cy="6.5" r="1" fill="currentColor" stroke="none" />
+      <path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 3" />
+    </>
+  ),
   minus: <path d="M3.5 8h9" />,
   plus: <path d="M8 3.5v9M3.5 8h9" />,
   fit: <path d="M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3" />,

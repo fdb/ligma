@@ -710,3 +710,69 @@ test("multiplayer: peer cursors appear and saves sync live", async ({ page, brow
 
   await ctx2.close();
 });
+
+test("images: place via File menu, drag-drop, render and persist", async ({ page }) => {
+  const id = await openNewDocument(page);
+
+  // A deterministic 60×40 red PNG, generated in-page.
+  const b64 = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 60;
+    c.height = 40;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(0, 0, 60, 40);
+    return c.toDataURL("image/png").split(",")[1];
+  });
+  const buffer = Buffer.from(b64, "base64");
+
+  // Place via File ▸ Place image…
+  await page.getByRole("button", { name: "File" }).click();
+  await page.getByRole("button", { name: "Place image…" }).click();
+  await page
+    .getByTestId("image-input")
+    .setInputFiles({ name: "red.png", mimeType: "image/png", buffer });
+  await expect(layers(page).getByText("Image 1")).toBeVisible();
+
+  // The bitmap really renders: sample the node's center pixel.
+  const s = await sceneOf(page);
+  const n = s.nodes[0];
+  const cx = (n.x + n.w / 2) * s.zoom + s.panX;
+  const cy = (n.y + n.h / 2) * s.zoom + s.panY;
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+  await expect.poll(() => pixelAt(cx, cy)).toEqual([255, 0, 0]);
+
+  // Drag-drop places a second image at the drop point.
+  const box = await canvasBox(page);
+  const dataTransfer = await page.evaluateHandle((b) => {
+    const dt = new DataTransfer();
+    const bytes = Uint8Array.from(atob(b), (ch) => ch.charCodeAt(0));
+    dt.items.add(new File([bytes], "drop.png", { type: "image/png" }));
+    return dt;
+  }, b64);
+  await page.dispatchEvent("canvas", "drop", {
+    dataTransfer,
+    clientX: box.x + 550,
+    clientY: box.y + 200,
+  });
+  await expect(layers(page).getByText("Image 2")).toBeVisible();
+
+  // Survives reload: document references the R2 asset. The camera
+  // re-fits to content on load, so recompute the sample point.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Image 1")).toBeVisible();
+  const s2 = await sceneOf(page);
+  const n2 = s2.nodes[0];
+  const cx2 = (n2.x + n2.w / 2) * s2.zoom + s2.panX;
+  const cy2 = (n2.y + n2.h / 2) * s2.zoom + s2.panY;
+  await expect.poll(() => pixelAt(cx2, cy2), { timeout: 10_000 }).toEqual([255, 0, 0]);
+});

@@ -10,6 +10,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Image uploads: drop a file on the canvas or File > Place image. Assets are content-addressed in R2 (re-uploads dedupe); image nodes move/resize/blend like any layer and export to SVG/PNG
+
 - Multiplayer presence: live named cursors over WebSockets (one presence room per document, hosted by its Durable Object), plus live document sync — when another editor saves, your copy refreshes automatically (unless you have unsaved changes; then last writer wins)
 - Blend modes (multiply, screen, overlay, … — all 16 CSS modes) per layer, in canvas rendering and SVG export
 

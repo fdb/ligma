@@ -336,6 +336,48 @@ const e12c = new Engine();
 assert(e12c.load_json(JSON.stringify(legacy)), "doc without blendMode loads");
 assert(JSON.parse(e12c.scene()).nodes[0].blendMode === "normal", "missing blendMode defaults");
 
+// Image nodes: placement, serialization, SVG export.
+const e13 = new Engine();
+const HASH = "a".repeat(32);
+const imgId = e13.add_image(HASH, 10, 20, 200, 100);
+let s13 = JSON.parse(e13.scene());
+assert(s13.nodes[0].kind === "image" && s13.nodes[0].image === HASH, "add_image creates an image node");
+assert(s13.nodes[0].fills.length === 0, "image nodes carry no fill paints");
+assert(s13.selection[0] === imgId, "placed image is selected");
+const e13b = new Engine();
+e13b.load_json(e13.to_json());
+assert(JSON.parse(e13b.scene()).nodes[0].image === HASH, "image hash round-trips");
+assert(
+  e13.export_svg(imgId).includes(`href="/api/assets/${HASH}"`),
+  "SVG export references the asset",
+);
+e13.undo();
+assert(JSON.parse(e13.scene()).nodes.length === 0, "add_image is undoable");
+
+// Asset store: upload bytes, read them back, dedupe on content.
+const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 1, 2, 3]);
+const up = await fetch(`${API}/api/assets`, {
+  method: "POST",
+  headers: { "Content-Type": "image/png" },
+  body: pngBytes,
+});
+assert(up.status === 201, "asset upload accepted");
+const { hash } = await up.json();
+const back = new Uint8Array(await fetch(`${API}/api/assets/${hash}`).then((r) => r.arrayBuffer()));
+assert(back.length === pngBytes.length && back[0] === 0x89, "asset bytes round-trip");
+const dup = await fetch(`${API}/api/assets`, {
+  method: "POST",
+  headers: { "Content-Type": "image/png" },
+  body: pngBytes,
+}).then((r) => r.json());
+assert(dup.hash === hash, "re-upload dedupes to the same hash");
+const rejected = await fetch(`${API}/api/assets`, {
+  method: "POST",
+  headers: { "Content-Type": "text/html" },
+  body: "<svg/>",
+});
+assert(rejected.status === 415, "non-image uploads are rejected");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

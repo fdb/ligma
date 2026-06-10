@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import init, { Engine } from "./pkg/ligma_core";
+import { ensureSceneImages } from "../lib/images";
 import type { Scene } from "../types";
 
 // init() must run exactly once per page: wasm-bindgen's loader has no
@@ -56,7 +57,9 @@ export function useEngine(docId: string) {
       const gen = engine.generation();
       if (gen !== generation.current) {
         generation.current = gen;
-        setScene(JSON.parse(engine.scene()) as Scene);
+        const next = JSON.parse(engine.scene()) as Scene;
+        ensureSceneImages(next); // start fetching any newly referenced assets
+        setScene(next);
       }
       raf = requestAnimationFrame(tick);
     };

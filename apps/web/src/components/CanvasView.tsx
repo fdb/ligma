@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import { fontMetrics } from "../lib/fontMetrics";
+import { placementSize, uploadImage } from "../lib/images";
 import type { Peer } from "../lib/usePresence";
 import { findNode, type Scene, type SceneNode, type Tool } from "../types";
 import { ContextMenu } from "./ContextMenu";
@@ -276,8 +277,29 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
 
   const overlayNode: SceneNode | null = overlay ? findNode(scene.nodes, overlay.id) : null;
 
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const r = canvasRef.current!.getBoundingClientRect();
+    const sx = e.clientX - r.left;
+    const sy = e.clientY - r.top;
+    const up = await uploadImage(file);
+    if (!up) return;
+    const s = sceneRef.current;
+    const { w, h } = placementSize(up.width, up.height);
+    const wx = (sx - s.panX) / s.zoom - w / 2;
+    const wy = (sy - s.panY) / s.zoom - h / 2;
+    engine.add_image(up.hash, wx, wy, w, h);
+  };
+
   return (
-    <div ref={wrapRef} className="relative min-w-0 flex-1 overflow-hidden">
+    <div
+      ref={wrapRef}
+      className="relative min-w-0 flex-1 overflow-hidden"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+    >
       <canvas
         ref={canvasRef}
         className="absolute inset-0 size-full touch-none"

@@ -1,4 +1,4 @@
-export type NodeKind = "frame" | "group" | "rect" | "ellipse" | "text";
+export type NodeKind = "frame" | "group" | "rect" | "ellipse" | "text" | "image";
 
 export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "hand";
 
@@ -32,6 +32,7 @@ export interface SceneNode {
   cornerRadius: number;
   text: string;
   fontSize: number;
+  image: string;
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }
