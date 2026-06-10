@@ -444,6 +444,33 @@ e15.undo();
 s15 = JSON.parse(e15.scene());
 assert(s15.nodes[0].children.length === 2, "reparent is undoable");
 
+// Font family: setter, validation, persistence, SVG.
+const e16 = new Engine();
+e16.set_tool("text");
+e16.pointer_down(0, 0, false, false);
+e16.pointer_up();
+const tid16 = JSON.parse(e16.scene()).nodes[0].id;
+assert(
+  JSON.parse(e16.scene()).nodes[0].fontFamily === "Hanken Grotesk",
+  "font family defaults to Hanken Grotesk",
+);
+e16.set_font_family(tid16, "Space Grotesk");
+assert(JSON.parse(e16.scene()).nodes[0].fontFamily === "Space Grotesk", "set_font_family applies");
+e16.set_font_family(tid16, 'Bad"; injection');
+assert(
+  JSON.parse(e16.scene()).nodes[0].fontFamily === "Space Grotesk",
+  "quote-bearing family names rejected",
+);
+const e16b = new Engine();
+e16b.load_json(e16.to_json());
+assert(JSON.parse(e16b.scene()).nodes[0].fontFamily === "Space Grotesk", "font family round-trips");
+assert(
+  e16.export_svg(tid16).includes('font-family="Space Grotesk, sans-serif"'),
+  "SVG export carries the family",
+);
+e16.undo();
+assert(JSON.parse(e16.scene()).nodes[0].fontFamily === "Hanken Grotesk", "font change is undoable");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

@@ -1,11 +1,12 @@
 # TODO / FEATURE WISHLIST
 
-- Text: select fonts and choose them from Google Fonts as well
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - more complex path operations like outline stroke, or even pathfinder operations like union/subtract,intersect,exclude (flatten + "frame selection" in the right-click menu wait on this)
 
 # DONE (things are moved here once they are done)
+
+- Text: font picker with a curated Google Fonts set (stylesheets load lazily; opening a document fetches the fonts it uses)
 
 - Outliner drag-reorganization: drag layer rows to reorder; drop onto a frame/group row to nest inside it (drop zones: above / into / below, with indicators)
 

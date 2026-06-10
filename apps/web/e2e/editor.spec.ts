@@ -872,3 +872,29 @@ test("outliner: dragging rows reorders and reparents layers", async ({ page }) =
   expect(s2.nodes.map((n: any) => n.name)).toEqual(["Rectangle 1", "Frame 1"]);
   expect(s2.nodes[1].children.length).toBe(0);
 });
+
+test("text: choosing a Google Font loads it and re-renders", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250);
+
+  await page.getByTestId("font-family").selectOption("Space Mono");
+  expect((await sceneOf(page)).nodes[0].fontFamily).toBe("Space Mono");
+
+  // The Google Fonts stylesheet was injected and the face becomes
+  // available to the document (the canvas picks it up next frame).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          await (document as any).fonts.load("16px 'Space Mono'");
+          return (document as any).fonts.check("16px 'Space Mono'");
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  // Persists through the engine round trip.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+});

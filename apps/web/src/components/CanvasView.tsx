@@ -363,8 +363,13 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
           // stays aligned.
           const fs = overlayNode.fontSize * scene.zoom;
           const slh = overlayNode.fontSize * 1.4 * scene.zoom;
-          const m = fontMetrics(fs);
-          const lineCount = wrapLines(overlayNode.text, fs, overlayNode.w * scene.zoom).length;
+          const m = fontMetrics(fs, overlayNode.fontFamily);
+          const lineCount = wrapLines(
+            overlayNode.text,
+            fs,
+            overlayNode.w * scene.zoom,
+            overlayNode.fontFamily,
+          ).length;
           const block = lineCount * slh;
           const boxTop = overlayNode.y * scene.zoom + scene.panY;
           const boxH = overlayNode.h * scene.zoom;
@@ -401,7 +406,7 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
                 lineHeight: `${slh}px`,
                 textAlign: overlayNode.textAlign,
                 whiteSpace: "pre-wrap",
-                fontFamily: "'Hanken Grotesk', sans-serif",
+                fontFamily: `'${overlayNode.fontFamily}', sans-serif`,
                 color: overlayNode.fills[0]?.color ?? "#18181b",
               }}
             />

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import init, { Engine } from "./pkg/ligma_core";
+import { ensureSceneFonts } from "../lib/fonts";
 import { ensureSceneImages } from "../lib/images";
 import type { Scene } from "../types";
 
@@ -59,6 +60,7 @@ export function useEngine(docId: string) {
         generation.current = gen;
         const next = JSON.parse(engine.scene()) as Scene;
         ensureSceneImages(next); // start fetching any newly referenced assets
+        ensureSceneFonts(next);
         setScene(next);
       }
       raf = requestAnimationFrame(tick);

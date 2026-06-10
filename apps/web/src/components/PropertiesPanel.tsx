@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import { findNode, type Paint, type Scene, type SceneNode } from "../types";
 import { exportNode } from "../lib/exporter";
+import { ensureFont, FONT_FAMILIES } from "../lib/fonts";
 import { ColorPicker } from "./ColorPicker";
 import { Icon } from "./Icon";
 import { NumberField } from "./NumberField";
@@ -354,6 +355,22 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
             rows={2}
             className="mb-2 w-full resize-none rounded-md bg-zinc-100 px-2 py-1.5 text-[12px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
           />
+          <select
+            data-testid="font-family"
+            value={n.fontFamily}
+            onChange={(e) => {
+              ensureFont(e.target.value);
+              engine.set_font_family(n.id, e.target.value);
+            }}
+            className="mb-2 h-7 w-full rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+            style={{ fontFamily: `'${n.fontFamily}', sans-serif` }}
+          >
+            {[...new Set([n.fontFamily, ...FONT_FAMILIES])].sort().map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
           <div className="grid grid-cols-2 gap-2">
             <NumberField label="S" value={n.fontSize} min={1} field="fontSize" {...common} />
           </div>

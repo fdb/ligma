@@ -14,9 +14,9 @@ let probe: CanvasRenderingContext2D | null = null;
  * - fbAscent/fbDescent: the font bounding box the browser also uses for CSS
  *   line layout.
  */
-export function fontMetrics(size: number) {
+export function fontMetrics(size: number, family = "Hanken Grotesk") {
   probe ??= document.createElement("canvas").getContext("2d")!;
-  probe.font = `${size}px 'Hanken Grotesk', sans-serif`;
+  probe.font = `${size}px '${family}', sans-serif`;
   probe.textBaseline = "alphabetic";
   const alpha = probe.measureText("Mg");
   probe.textBaseline = "top";
@@ -31,9 +31,14 @@ export function fontMetrics(size: number) {
 /** Same greedy word wrap as the engine (ligma-core wrap_text), measured
  * with the same font string, so the overlay editor's line count matches
  * what the canvas drew. */
-export function wrapLines(text: string, size: number, maxW: number): string[] {
+export function wrapLines(
+  text: string,
+  size: number,
+  maxW: number,
+  family = "Hanken Grotesk",
+): string[] {
   probe ??= document.createElement("canvas").getContext("2d")!;
-  probe.font = `${size}px 'Hanken Grotesk', sans-serif`;
+  probe.font = `${size}px '${family}', sans-serif`;
   const lines: string[] = [];
   for (const para of text.split("\n")) {
     let line = "";

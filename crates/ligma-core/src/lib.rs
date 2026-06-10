@@ -62,6 +62,9 @@ fn default_stroke_weight() -> f64 {
 fn default_blend_mode() -> String {
     "normal".to_string()
 }
+fn default_font_family() -> String {
+    "Hanken Grotesk".to_string()
+}
 fn default_text_align() -> String {
     "left".to_string()
 }
@@ -120,6 +123,8 @@ pub struct Node {
     pub corner_radius: f64,
     pub text: String,
     pub font_size: f64,
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
     #[serde(default = "default_text_align")]
     pub text_align: String,
     #[serde(default = "default_text_valign")]
@@ -413,6 +418,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             corner_radius: n.corner_radius,
             text: n.text,
             font_size: n.font_size,
+            font_family: default_font_family(),
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
@@ -1034,6 +1040,18 @@ impl Engine {
         self.touch();
     }
 
+    pub fn set_font_family(&mut self, id: u32, family: &str) {
+        let family = family.trim();
+        if family.is_empty() || family.len() > 80 || family.contains(['\'', '"', ';']) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.font_family = family.to_string();
+        }
+        self.touch();
+    }
+
     pub fn set_text_align(&mut self, id: u32, align: &str) {
         if !["left", "center", "right"].contains(&align) {
             return;
@@ -1148,6 +1166,7 @@ impl Engine {
             corner_radius: 0.0,
             text: String::new(),
             font_size: 16.0,
+            font_family: default_font_family(),
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
@@ -1820,6 +1839,7 @@ impl Engine {
             corner_radius: 0.0,
             text: if kind == NodeKind::Text { "Text".to_string() } else { String::new() },
             font_size: 16.0,
+            font_family: default_font_family(),
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
@@ -1928,7 +1948,7 @@ fn draw_node(
             stroke_paints(ctx, n, alpha, |ctx| ellipse_path(ctx, n));
         }
         NodeKind::Text => {
-            ctx.set_font(&format!("{}px 'Hanken Grotesk', sans-serif", n.font_size));
+            ctx.set_font(&format!("{}px '{}', sans-serif", n.font_size, n.font_family));
             ctx.set_text_baseline("top");
             let lh = n.font_size * LINE_HEIGHT;
             let lines = wrap_text(ctx, &n.text, n.w);
@@ -2150,8 +2170,8 @@ fn svg_node(
                     // Baseline approximation: ~0.8em below the em top.
                     let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0 + n.font_size * 0.8;
                     out.push_str(&format!(
-                        r#"<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="Hanken Grotesk, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
-                        n.font_size, xml_escape(&p.color), p.opacity, xml_escape(line)
+                        r#"<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{}, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
+                        xml_escape(&n.font_family), n.font_size, xml_escape(&p.color), p.opacity, xml_escape(line)
                     ));
                 }
             }
