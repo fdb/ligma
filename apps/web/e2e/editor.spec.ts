@@ -243,7 +243,13 @@ test("export presets: saved per node, PNG and SVG download", async ({ page }) =>
   // Two presets: default 1x PNG, plus an SVG.
   await page.getByTitle("Add export").click();
   await page.getByTitle("Add export").click();
-  await page.locator("select").nth(3).selectOption("svg");
+  // The second preset's format select (format selects are the ones that
+  // offer an "svg" option — index-proof against other panel selects).
+  await page
+    .locator("select")
+    .filter({ has: page.locator('option[value="svg"]') })
+    .last()
+    .selectOption("svg");
 
   const downloads: string[] = [];
   page.on("download", (d) => downloads.push(d.suggestedFilename()));
@@ -632,4 +638,42 @@ test("color picker: hex entry, SV drag coalesces undo, eyedropper samples the ca
   await page.getByTitle("Pick color from canvas").click();
   await clickCanvas(page, 250, 250); // sample inside the red rectangle
   await expect.poll(async () => (await fillOf(1)).color).toBe("#ff0000");
+});
+
+test("blend modes composite on the canvas and survive reload", async ({ page }) => {
+  const id = await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 300, 300);
+  await page.keyboard.press("r");
+  await drag(page, 250, 250, 350, 350);
+  await page.evaluate(() => {
+    const e = (window as any).__engine;
+    const s = JSON.parse(e.scene());
+    e.update_paint(s.nodes[0].id, "fills", 0, "#ff0000", 1);
+    e.update_paint(s.nodes[1].id, "fills", 0, "#00ff00", 1);
+  });
+
+  // Sample the overlap: green wins while the top rect is "normal".
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+  await expect.poll(() => pixelAt(275, 275)).toEqual([0, 255, 0]);
+
+  // Multiply: red × green = black.
+  await page.getByTestId("blend-mode").selectOption("multiply");
+  await expect.poll(() => pixelAt(275, 275)).toEqual([0, 0, 0]);
+
+  // The mode persists through save + reload.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Rectangle 2")).toBeVisible(); // engine loaded
+  await expect
+    .poll(async () => (await sceneOf(page)).nodes[1].blendMode)
+    .toBe("multiply");
 });

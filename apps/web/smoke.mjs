@@ -309,6 +309,33 @@ assert(
   "picker drag is one undo step",
 );
 
+// Blend modes: set, validate, serialize, and survive old documents.
+const e12 = new Engine();
+e12.set_tool("rect");
+e12.pointer_down(0, 0, false, false);
+e12.pointer_move(50, 50);
+e12.pointer_up();
+const rid12 = JSON.parse(e12.scene()).nodes[0].id;
+assert(JSON.parse(e12.scene()).nodes[0].blendMode === "normal", "blend mode defaults to normal");
+e12.set_blend_mode(rid12, "multiply");
+assert(JSON.parse(e12.scene()).nodes[0].blendMode === "multiply", "set_blend_mode applies");
+e12.set_blend_mode(rid12, "bogus");
+assert(JSON.parse(e12.scene()).nodes[0].blendMode === "multiply", "unknown blend modes ignored");
+e12.undo();
+assert(JSON.parse(e12.scene()).nodes[0].blendMode === "normal", "blend change is undoable");
+e12.set_blend_mode(rid12, "screen");
+const e12b = new Engine();
+assert(e12b.load_json(e12.to_json()), "blend mode round-trips");
+assert(JSON.parse(e12b.scene()).nodes[0].blendMode === "screen", "blend mode persists");
+const svg12 = e12.export_svg(rid12);
+assert(svg12.includes("mix-blend-mode:screen"), "SVG export carries mix-blend-mode");
+// A pre-blend document (no blendMode field) loads with the default.
+const legacy = JSON.parse(e12.to_json());
+delete legacy.nodes[0].blendMode;
+const e12c = new Engine();
+assert(e12c.load_json(JSON.stringify(legacy)), "doc without blendMode loads");
+assert(JSON.parse(e12c.scene()).nodes[0].blendMode === "normal", "missing blendMode defaults");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

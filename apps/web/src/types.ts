@@ -28,6 +28,7 @@ export interface SceneNode {
   strokes: Paint[];
   strokeWeight: number;
   opacity: number;
+  blendMode: string;
   cornerRadius: number;
   text: string;
   fontSize: number;

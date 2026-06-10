@@ -55,6 +55,30 @@ fn default_true() -> bool {
 fn default_stroke_weight() -> f64 {
     1.0
 }
+fn default_blend_mode() -> String {
+    "normal".to_string()
+}
+
+/// CSS blend modes shared by canvas (globalCompositeOperation) and SVG
+/// (mix-blend-mode). "normal" maps to canvas "source-over".
+const BLEND_MODES: [&str; 16] = [
+    "normal",
+    "multiply",
+    "screen",
+    "overlay",
+    "darken",
+    "lighten",
+    "color-dodge",
+    "color-burn",
+    "hard-light",
+    "soft-light",
+    "difference",
+    "exclusion",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
+];
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +100,8 @@ pub struct Node {
     #[serde(default = "default_stroke_weight")]
     pub stroke_weight: f64,
     pub opacity: f64,
+    #[serde(default = "default_blend_mode")]
+    pub blend_mode: String,
     pub corner_radius: f64,
     pub text: String,
     pub font_size: f64,
@@ -360,6 +386,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: n.opacity,
+            blend_mode: default_blend_mode(),
             corner_radius: n.corner_radius,
             text: n.text,
             font_size: n.font_size,
@@ -963,6 +990,19 @@ impl Engine {
         self.touch();
     }
 
+    /// Sets a node's blend mode (one of the CSS blend modes; "normal"
+    /// resets). Unknown values are ignored.
+    pub fn set_blend_mode(&mut self, id: u32, mode: &str) {
+        if !BLEND_MODES.contains(&mode) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.blend_mode = mode.to_string();
+        }
+        self.touch();
+    }
+
     // ----- visibility & locking -----
 
     pub fn set_visible(&mut self, id: u32, visible: bool) {
@@ -1051,6 +1091,7 @@ impl Engine {
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: 1.0,
+            blend_mode: default_blend_mode(),
             corner_radius: 0.0,
             text: String::new(),
             font_size: 16.0,
@@ -1663,6 +1704,7 @@ impl Engine {
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: 1.0,
+            blend_mode: default_blend_mode(),
             corner_radius: 0.0,
             text: if kind == NodeKind::Text { "Text".to_string() } else { String::new() },
             font_size: 16.0,
@@ -1715,6 +1757,10 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
         return;
     }
     let alpha = parent_alpha * n.opacity;
+    let blended = n.blend_mode != "normal";
+    if blended {
+        let _ = ctx.set_global_composite_operation(&n.blend_mode);
+    }
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
@@ -1778,6 +1824,9 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
         }
     }
     ctx.set_global_alpha(1.0);
+    if blended {
+        let _ = ctx.set_global_composite_operation("source-over");
+    }
 }
 
 fn stroke_paints(
@@ -1830,7 +1879,12 @@ fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
         return;
     }
     let opacity = if n.opacity < 1.0 { format!(r#" opacity="{}""#, n.opacity) } else { String::new() };
-    out.push_str(&format!("<g{opacity}>"));
+    let blend = if n.blend_mode != "normal" {
+        format!(r#" style="mix-blend-mode:{}""#, n.blend_mode)
+    } else {
+        String::new()
+    };
+    out.push_str(&format!("<g{opacity}{blend}>"));
     let (x, y) = (n.x + ox, n.y + oy);
     match n.kind {
         NodeKind::Group => {

@@ -123,6 +123,25 @@ function PaintRow({
 
 const SCALES = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 
+const BLEND_MODES = [
+  "normal",
+  "multiply",
+  "screen",
+  "overlay",
+  "darken",
+  "lighten",
+  "color-dodge",
+  "color-burn",
+  "hard-light",
+  "soft-light",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+];
+
 function ExportSection({ engine, node }: { engine: Engine; node: SceneNode }) {
   return (
     <Section title="Export" onAdd={() => engine.add_export_preset(node.id)}>
@@ -278,6 +297,18 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
             />
           )}
         </div>
+        <select
+          data-testid="blend-mode"
+          value={n.blendMode}
+          onChange={(e) => engine.set_blend_mode(n.id, e.target.value)}
+          className="mt-2 h-7 w-full rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+        >
+          {BLEND_MODES.map((m) => (
+            <option key={m} value={m}>
+              {m.charAt(0).toUpperCase() + m.slice(1).replace("-", " ")}
+            </option>
+          ))}
+        </select>
       </Section>
 
       {!isGroup && (
