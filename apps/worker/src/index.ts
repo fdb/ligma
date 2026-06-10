@@ -92,6 +92,31 @@ app.post("/api/documents", async (c) => {
   return c.json({ id, name }, 201);
 });
 
+app.get("/api/documents/:id/meta", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  const row = await c.env.DB.prepare(
+    "SELECT id, name, created_at, updated_at, current_version, size FROM documents WHERE id = ?",
+  )
+    .bind(id)
+    .first();
+  if (!row) return c.text("not found", 404);
+  return c.json(row);
+});
+
+app.patch("/api/documents/:id", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  const body = await c.req.json().catch(() => ({}));
+  const name = typeof body?.name === "string" ? body.name.trim().slice(0, 120) : "";
+  if (!name) return c.text("name required", 400);
+  const result = await c.env.DB.prepare("UPDATE documents SET name = ? WHERE id = ?")
+    .bind(name, id)
+    .run();
+  if (!result.meta.changes) return c.text("not found", 404);
+  return c.body(null, 204);
+});
+
 app.get("/api/documents/:id", async (c) => {
   const id = c.req.param("id");
   if (!ID_RE.test(id)) return c.text("invalid document id", 400);

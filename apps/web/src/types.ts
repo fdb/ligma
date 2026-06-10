@@ -41,6 +41,8 @@ export interface Scene {
   hovered: number | null;
   tool: Tool;
   zoom: number;
+  panX: number;
+  panY: number;
   generation: number;
 }
 

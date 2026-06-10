@@ -41,6 +41,24 @@ const paths: Record<string, React.ReactNode> = {
   ),
   chevron: <path d="M6 4.5L10 8l-4 3.5" />,
   download: <path d="M8 2.5V10M5 7.5L8 10.5l3-3M3 13h10" />,
+  "align-left": <path d="M3 2.5v11M3 6h7M3 10h4.5" />,
+  "align-hcenter": <path d="M8 2.5v11M4 6h8M5.5 10h5" />,
+  "align-right": <path d="M13 2.5v11M6 6h7M8.5 10h4.5" />,
+  "align-top": <path d="M2.5 3h11M6 3v7M10 3v4.5" />,
+  "align-vcenter": <path d="M2.5 8h11M6 4v8M10 5.5v5" />,
+  "align-bottom": <path d="M2.5 13h11M6 6v7M10 8.5v4.5" />,
+  "dist-h": (
+    <>
+      <path d="M2.5 2.5v11M13.5 2.5v11" />
+      <rect x="6.5" y="5" width="3" height="6" />
+    </>
+  ),
+  "dist-v": (
+    <>
+      <path d="M2.5 2.5h11M2.5 13.5h11" />
+      <rect x="5" y="6.5" width="6" height="3" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {

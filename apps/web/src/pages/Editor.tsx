@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getRouteApi, Link } from "@tanstack/react-router";
 import { CanvasView } from "../components/CanvasView";
 import { LayersPanel } from "../components/LayersPanel";
@@ -12,7 +12,34 @@ export function Editor() {
   const { docId } = route.useParams();
   const { engine, scene, notFound } = useEngine(docId);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [docName, setDocName] = useState("");
   const canvasWrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch(`/api/documents/${docId}/meta`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((meta) => meta && setDocName(meta.name))
+      .catch(() => {});
+  }, [docId]);
+
+  useEffect(() => {
+    document.title = docName ? `${docName} – Ligma` : "Ligma";
+    return () => {
+      document.title = "Ligma";
+    };
+  }, [docName]);
+
+  const onRename = useCallback(
+    (name: string) => {
+      setDocName(name);
+      fetch(`/api/documents/${docId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }).catch(() => {});
+    },
+    [docId],
+  );
 
   const onSave = useCallback(async () => {
     if (!engine) return;
@@ -59,7 +86,8 @@ export function Editor() {
       <TopBar
         engine={engine}
         scene={scene}
-        docId={docId}
+        docName={docName}
+        onRename={onRename}
         saveState={saveState}
         onSave={onSave}
         viewport={() => ({

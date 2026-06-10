@@ -266,6 +266,7 @@ enum Drag {
         ox: f64,
         oy: f64,
         moved: bool,
+        alt_copied: bool,
     },
     Resize {
         id: u32,
@@ -363,7 +364,18 @@ struct SceneInfo<'a> {
     hovered: Option<u32>,
     tool: &'static str,
     zoom: f64,
+    pan_x: f64,
+    pan_y: f64,
     generation: u32,
+}
+
+/// A snap guide produced while dragging: a vertical or horizontal line in
+/// world space, spanning the snapped boxes.
+struct Guide {
+    vertical: bool,
+    pos: f64,
+    from: f64,
+    to: f64,
 }
 
 #[wasm_bindgen]
@@ -377,6 +389,8 @@ pub struct Engine {
     pan_y: f64,
     zoom: f64,
     drag: Drag,
+    guides: Vec<Guide>,
+    editing: Option<u32>,
     pending_undo: Option<Vec<Node>>,
     undo: Vec<Vec<Node>>,
     redo: Vec<Vec<Node>>,
@@ -398,6 +412,8 @@ impl Engine {
             pan_y: 0.0,
             zoom: 1.0,
             drag: Drag::None,
+            guides: Vec::new(),
+            editing: None,
             pending_undo: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -416,6 +432,8 @@ impl Engine {
             hovered: self.hovered,
             tool: self.tool.as_str(),
             zoom: self.zoom,
+            pan_x: self.pan_x,
+            pan_y: self.pan_y,
             generation: self.generation,
         })
         .unwrap_or_default()
@@ -470,14 +488,15 @@ impl Engine {
 
     // ----- pointer input (screen coordinates) -----
 
-    pub fn pointer_down(&mut self, sx: f64, sy: f64, shift: bool) {
+    pub fn pointer_down(&mut self, sx: f64, sy: f64, shift: bool, alt: bool) {
         let (x, y) = self.to_world(sx, sy);
         match self.tool {
             Tool::Hand => {
                 self.drag = Drag::Pan { last_x: sx, last_y: sy };
             }
             Tool::Select => {
-                // Resize handles take priority, then nodes, then marquee.
+                // Resize handles take priority, then frame labels, then
+                // nodes, then marquee.
                 if let Some(handle) = self.handle_at(sx, sy) {
                     let id = self.selection[0];
                     let n = find_node(&self.nodes, id).unwrap();
@@ -493,7 +512,7 @@ impl Engine {
                         ox: x,
                         oy: y,
                     };
-                } else if let Some(id) = self.hit_test(x, y) {
+                } else if let Some(id) = self.hit_test(x, y).or_else(|| self.frame_label_hit(sx, sy)) {
                     if shift {
                         if let Some(i) = self.selection.iter().position(|&s| s == id) {
                             self.selection.remove(i);
@@ -504,12 +523,28 @@ impl Engine {
                         self.selection = vec![id];
                     }
                     self.begin_mutation();
+                    // Option-drag: duplicate in place and drag the copies;
+                    // the originals stay put.
+                    if alt {
+                        let mut new_ids = Vec::new();
+                        for sid in self.selection.clone() {
+                            if let Some(path) = path_to(&self.nodes, sid) {
+                                let index = *path.last().unwrap();
+                                let list = list_at(&mut self.nodes, &path);
+                                let mut copy = list[index].clone();
+                                assign_fresh_ids(&mut copy, &mut self.next_id);
+                                new_ids.push(copy.id);
+                                list.insert(index + 1, copy);
+                            }
+                        }
+                        self.selection = new_ids;
+                    }
                     let starts = self
                         .selection
                         .iter()
                         .filter_map(|&sid| find_node(&self.nodes, sid).map(|n| (sid, n.x, n.y)))
                         .collect();
-                    self.drag = Drag::Move { starts, ox: x, oy: y, moved: false };
+                    self.drag = Drag::Move { starts, ox: x, oy: y, moved: false, alt_copied: alt };
                 } else {
                     if !shift {
                         self.selection.clear();
@@ -560,11 +595,12 @@ impl Engine {
                     n.h = (y - oy).abs();
                 }
             }
-            Drag::Move { starts, ox, oy, moved } => {
+            Drag::Move { starts, ox, oy, moved, .. } => {
                 let (dx, dy) = (x - *ox, y - *oy);
                 *moved = *moved || dx.abs() > 0.01 || dy.abs() > 0.01;
                 let updates: Vec<(u32, f64, f64)> =
                     starts.iter().map(|&(id, nx, ny)| (id, nx + dx, ny + dy)).collect();
+                let ids: Vec<u32> = starts.iter().map(|s| s.0).collect();
                 for (id, nx, ny) in updates {
                     if let Some(n) = find_node_mut(&mut self.nodes, id) {
                         let (ddx, ddy) = (nx - n.x, ny - n.y);
@@ -572,6 +608,7 @@ impl Engine {
                     }
                 }
                 recompute_group_bounds(&mut self.nodes);
+                self.apply_snapping(&ids);
             }
             Drag::Resize { id, handle, sx: rx, sy: ry, sw, sh, ox, oy } => {
                 let (dx, dy) = (x - *ox, y - *oy);
@@ -640,7 +677,7 @@ impl Engine {
                 self.commit_mutation();
                 self.tool = Tool::Select;
             }
-            Drag::Move { starts, moved, .. } => {
+            Drag::Move { starts, moved, alt_copied, .. } => {
                 if moved {
                     for (id, _, _) in starts {
                         if let Some(n) = find_node_mut(&mut self.nodes, id) {
@@ -649,6 +686,12 @@ impl Engine {
                     }
                     recompute_group_bounds(&mut self.nodes);
                     self.commit_mutation();
+                } else if alt_copied {
+                    // Option-click without a drag: discard the staged copies.
+                    if let Some(snap) = self.pending_undo.take() {
+                        self.nodes = snap;
+                        self.retain_valid_selection();
+                    }
                 } else {
                     self.pending_undo = None;
                 }
@@ -664,6 +707,7 @@ impl Engine {
                 self.pending_undo = None;
             }
         }
+        self.guides.clear();
         self.touch();
     }
 
@@ -969,6 +1013,89 @@ impl Engine {
         self.touch();
     }
 
+    // ----- align & distribute -----
+
+    /// Aligns selected nodes within their joint bounding box.
+    /// Modes: left, hcenter, right, top, vcenter, bottom.
+    pub fn align_selection(&mut self, mode: &str) {
+        if self.selection.len() < 2 {
+            return;
+        }
+        let Some((bx, by, bx2, by2)) = self.selection_bbox(&self.selection.clone()) else {
+            return;
+        };
+        self.snapshot_now();
+        for id in self.selection.clone() {
+            if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                let (dx, dy) = match mode {
+                    "left" => (bx - n.x, 0.0),
+                    "hcenter" => ((bx + bx2) / 2.0 - (n.x + n.w / 2.0), 0.0),
+                    "right" => (bx2 - (n.x + n.w), 0.0),
+                    "top" => (0.0, by - n.y),
+                    "vcenter" => (0.0, (by + by2) / 2.0 - (n.y + n.h / 2.0)),
+                    "bottom" => (0.0, by2 - (n.y + n.h)),
+                    _ => (0.0, 0.0),
+                };
+                shift_subtree(n, dx, dy);
+            }
+        }
+        recompute_group_bounds(&mut self.nodes);
+        self.touch();
+    }
+
+    /// Distributes 3+ selected nodes with equal gaps along an axis ("h"/"v").
+    pub fn distribute_selection(&mut self, axis: &str) {
+        if self.selection.len() < 3 {
+            return;
+        }
+        let horizontal = axis == "h";
+        let mut items: Vec<(u32, f64, f64)> = self
+            .selection
+            .iter()
+            .filter_map(|&id| {
+                find_node(&self.nodes, id).map(|n| {
+                    if horizontal { (id, n.x, n.w) } else { (id, n.y, n.h) }
+                })
+            })
+            .collect();
+        items.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let first_start = items[0].1;
+        let last = items.last().unwrap();
+        let span = (last.1 + last.2) - first_start;
+        let total_size: f64 = items.iter().map(|i| i.2).sum();
+        let gap = (span - total_size) / (items.len() - 1) as f64;
+
+        self.snapshot_now();
+        let mut cursor = first_start;
+        for (id, pos, size) in items {
+            let delta = cursor - pos;
+            if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                if horizontal {
+                    shift_subtree(n, delta, 0.0);
+                } else {
+                    shift_subtree(n, 0.0, delta);
+                }
+            }
+            cursor += size + gap;
+        }
+        recompute_group_bounds(&mut self.nodes);
+        self.touch();
+    }
+
+    // ----- canvas text editing & frame labels -----
+
+    /// Marks a node as being edited in an overlay; rendering skips it.
+    /// Pass 0 to clear.
+    pub fn set_editing_node(&mut self, id: u32) {
+        self.editing = if id == 0 { None } else { Some(id) };
+        self.touch();
+    }
+
+    /// The frame whose name label sits under a screen-space point.
+    pub fn frame_label_at(&self, sx: f64, sy: f64) -> Option<u32> {
+        self.frame_label_hit(sx, sy)
+    }
+
     // ----- destructive ops -----
 
     pub fn delete_selection(&mut self) {
@@ -1109,6 +1236,12 @@ impl Engine {
         let _ = ctx.scale(self.zoom, self.zoom);
 
         for n in &self.nodes {
+            // A text node under inline editing renders in the DOM overlay
+            // instead. (Frames being renamed keep their body; only the
+            // label pass skips them.)
+            if self.editing == Some(n.id) && n.kind == NodeKind::Text {
+                continue;
+            }
             draw_node(ctx, n, 1.0, self.zoom);
         }
         ctx.set_global_alpha(1.0);
@@ -1154,13 +1287,28 @@ impl Engine {
             ctx.stroke_rect(mx, my, mw, mh);
         }
 
+        // Snap guides.
+        for g in &self.guides {
+            ctx.set_stroke_style_str("#f43f5e");
+            ctx.set_line_width(1.0 / self.zoom);
+            ctx.begin_path();
+            if g.vertical {
+                ctx.move_to(g.pos, g.from);
+                ctx.line_to(g.pos, g.to);
+            } else {
+                ctx.move_to(g.from, g.pos);
+                ctx.line_to(g.to, g.pos);
+            }
+            ctx.stroke();
+        }
+
         // Frame labels are drawn in screen space so they stay readable at
         // any zoom level.
         let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
         ctx.set_font("11px 'Hanken Grotesk', sans-serif");
         ctx.set_text_baseline("alphabetic");
         for n in &self.nodes {
-            if n.kind == NodeKind::Frame && n.visible {
+            if n.kind == NodeKind::Frame && n.visible && self.editing != Some(n.id) {
                 let selected = self.selection.contains(&n.id);
                 ctx.set_fill_style_str(if selected { "#0284c7" } else { "#71717a" });
                 let _ = ctx.fill_text(
@@ -1211,6 +1359,103 @@ impl Engine {
             let py = (n.y + hy * n.h) * self.zoom + self.pan_y;
             (sx - px).abs() <= grab && (sy - py).abs() <= grab
         })
+    }
+
+    fn selection_bbox(&self, ids: &[u32]) -> Option<(f64, f64, f64, f64)> {
+        let mut bbox: Option<(f64, f64, f64, f64)> = None;
+        for &id in ids {
+            if let Some(n) = find_node(&self.nodes, id) {
+                bbox = Some(match bbox {
+                    None => (n.x, n.y, n.x + n.w, n.y + n.h),
+                    Some((bx, by, bx2, by2)) => {
+                        (bx.min(n.x), by.min(n.y), bx2.max(n.x + n.w), by2.max(n.y + n.h))
+                    }
+                });
+            }
+        }
+        bbox
+    }
+
+    /// Snaps the moving selection's bounding box edges/centers to other
+    /// top-level nodes within a screen-space threshold, recording guides.
+    fn apply_snapping(&mut self, moved_ids: &[u32]) {
+        self.guides.clear();
+        let Some((bx, by, bx2, by2)) = self.selection_bbox(moved_ids) else {
+            return;
+        };
+        let threshold = 6.0 / self.zoom;
+
+        // (delta, snapped position, other box span on the perpendicular axis)
+        let mut best_x: Option<(f64, f64, f64, f64)> = None;
+        let mut best_y: Option<(f64, f64, f64, f64)> = None;
+        for n in &self.nodes {
+            if !n.visible || moved_ids.contains(&n.id) {
+                continue;
+            }
+            for cand in [n.x, n.x + n.w / 2.0, n.x + n.w] {
+                for own in [bx, (bx + bx2) / 2.0, bx2] {
+                    let d = cand - own;
+                    if d.abs() < threshold
+                        && best_x.map_or(true, |(bd, ..)| d.abs() < bd.abs())
+                    {
+                        best_x = Some((d, cand, n.y, n.y + n.h));
+                    }
+                }
+            }
+            for cand in [n.y, n.y + n.h / 2.0, n.y + n.h] {
+                for own in [by, (by + by2) / 2.0, by2] {
+                    let d = cand - own;
+                    if d.abs() < threshold
+                        && best_y.map_or(true, |(bd, ..)| d.abs() < bd.abs())
+                    {
+                        best_y = Some((d, cand, n.x, n.x + n.w));
+                    }
+                }
+            }
+        }
+
+        let dx = best_x.map_or(0.0, |b| b.0);
+        let dy = best_y.map_or(0.0, |b| b.0);
+        if dx != 0.0 || dy != 0.0 {
+            for &id in moved_ids {
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                    shift_subtree(n, dx, dy);
+                }
+            }
+            recompute_group_bounds(&mut self.nodes);
+        }
+        if let Some((_, pos, from, to)) = best_x {
+            self.guides.push(Guide {
+                vertical: true,
+                pos,
+                from: from.min(by + dy),
+                to: to.max(by2 + dy),
+            });
+        }
+        if let Some((_, pos, from, to)) = best_y {
+            self.guides.push(Guide {
+                vertical: false,
+                pos,
+                from: from.min(bx + dx),
+                to: to.max(bx2 + dx),
+            });
+        }
+    }
+
+    /// Screen-space hit test for frame name labels (drawn above frames).
+    fn frame_label_hit(&self, sx: f64, sy: f64) -> Option<u32> {
+        for n in self.nodes.iter().rev() {
+            if n.kind != NodeKind::Frame || !n.visible || n.locked {
+                continue;
+            }
+            let lx = n.x * self.zoom + self.pan_x;
+            let ly = n.y * self.zoom + self.pan_y - 18.0;
+            let lw = (n.name.chars().count() as f64) * 6.5 + 6.0;
+            if sx >= lx && sx <= lx + lw && sy >= ly && sy <= ly + 16.0 {
+                return Some(n.id);
+            }
+        }
+        None
     }
 
     fn add_node(&mut self, kind: NodeKind, x: f64, y: f64, w: f64, h: f64) -> u32 {

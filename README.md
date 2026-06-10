@@ -70,6 +70,8 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 | `⌘G` / `⇧⌘G` | Group / ungroup |
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |
+| `⌥`-drag | Drag a copy (original stays put) |
+| Double-click | Edit text in place · rename a frame via its label |
 | `⇧1` / `⌘0` | Zoom to fit / 100% |
 | `⌘S` | Save to server |
 

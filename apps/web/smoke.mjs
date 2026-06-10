@@ -18,7 +18,7 @@ const scene = () => JSON.parse(e.scene());
 
 // Draw a rectangle by dragging.
 e.set_tool("rect");
-e.pointer_down(100, 100, false);
+e.pointer_down(100, 100, false, false);
 e.pointer_move(220, 180);
 e.pointer_up();
 let s = scene();
@@ -28,7 +28,7 @@ assert(s.selection.length === 1, "new node is selected");
 assert(s.tool === "select", "tool returns to select after drawing");
 
 // Move it.
-e.pointer_down(150, 150, false);
+e.pointer_down(150, 150, false, false);
 e.pointer_move(200, 170);
 e.pointer_up();
 s = scene();
@@ -88,7 +88,7 @@ assert(e2.load_json(remote), "load_json accepts worker-stored document");
 
 // Groups: group two nodes, move the group (children follow), ungroup.
 e.set_tool("rect");
-e.pointer_down(500, 500, false);
+e.pointer_down(500, 500, false, false);
 e.pointer_move(560, 560);
 e.pointer_up();
 const idB = scene().nodes.at(-1).id;
@@ -129,6 +129,66 @@ assert(e3.load_json(v1), "v1 document loads");
 const migrated = JSON.parse(e3.scene()).nodes[0];
 assert(migrated.fills[0].color === "#ff0000", "v1 fill migrates to fills[0]");
 assert(migrated.opacity === 0.8 && migrated.visible === true, "v1 node fields survive migration");
+
+// Option-drag copies: drag with alt duplicates in place and moves the copy.
+e3.set_tool("select");
+e3.pointer_down(5, 5, false, true);
+e3.pointer_move(40, 5);
+e3.pointer_up();
+let s3 = JSON.parse(e3.scene());
+assert(s3.nodes.length === 2, "alt-drag duplicates the shape");
+assert(s3.nodes[0].x === 0 && s3.nodes[1].x === 35, "original stays, copy moves");
+e3.undo();
+assert(JSON.parse(e3.scene()).nodes.length === 1, "one undo removes the alt-copy");
+e3.pointer_down(5, 5, false, true);
+e3.pointer_up();
+assert(JSON.parse(e3.scene()).nodes.length === 1, "alt-click without drag leaves no copy");
+
+// Snapping: dragging near another node's edge snaps to it exactly.
+const e4 = new Engine();
+e4.set_tool("rect");
+e4.pointer_down(0, 0, false, false);
+e4.pointer_move(100, 100);
+e4.pointer_up();
+e4.set_tool("rect");
+e4.pointer_down(200, 50, false, false);
+e4.pointer_move(260, 110);
+e4.pointer_up();
+e4.pointer_down(230, 80, false, false); // grab the second rect
+e4.pointer_move(133, 80); // left edge lands at 103 — within snap range of 100
+e4.pointer_up();
+assert(JSON.parse(e4.scene()).nodes[1].x === 100, "drag snaps to a neighboring edge");
+
+// Align & distribute.
+const e5 = new Engine();
+const drawRect = (x, y) => {
+  e5.set_tool("rect");
+  e5.pointer_down(x, y, false, false);
+  e5.pointer_move(x + 40, y + 40);
+  e5.pointer_up();
+};
+drawRect(0, 0);
+drawRect(100, 10);
+drawRect(300, 30);
+const ids5 = JSON.parse(e5.scene()).nodes.map((n) => n.id);
+e5.select(ids5[0], false);
+e5.select(ids5[1], true);
+e5.select(ids5[2], true);
+e5.align_selection("top");
+assert(
+  JSON.parse(e5.scene()).nodes.every((n) => n.y === 0),
+  "align top moves all nodes to the bbox top",
+);
+e5.distribute_selection("h");
+assert(
+  JSON.parse(e5.scene()).nodes.map((n) => n.x).join() === "0,150,300",
+  "distribute h spaces gaps evenly",
+);
+e5.undo();
+assert(
+  JSON.parse(e5.scene()).nodes.map((n) => n.x).join() === "0,100,300",
+  "distribute is one undo step",
+);
 
 // Camera.
 e.wheel(0, -100, true, 400, 300);

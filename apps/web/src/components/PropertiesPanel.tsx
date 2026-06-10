@@ -168,8 +168,48 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
   }
 
   if (selected.length > 1) {
+    const aligns = [
+      ["align-left", "left", "Align left"],
+      ["align-hcenter", "hcenter", "Align horizontal centers"],
+      ["align-right", "right", "Align right"],
+      ["align-top", "top", "Align top"],
+      ["align-vcenter", "vcenter", "Align vertical centers"],
+      ["align-bottom", "bottom", "Align bottom"],
+    ] as const;
     return (
       <aside className="w-60 shrink-0 border-l border-zinc-200 bg-white">
+        <Section title="Arrange">
+          <div className="flex items-center justify-between">
+            {aligns.map(([icon, mode, title]) => (
+              <button
+                key={mode}
+                title={title}
+                onClick={() => engine.align_selection(mode)}
+                className="flex size-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+              >
+                <Icon name={icon} size={14} />
+              </button>
+            ))}
+          </div>
+          {selected.length >= 3 && (
+            <div className="mt-1 flex items-center gap-1">
+              <button
+                title="Distribute horizontally"
+                onClick={() => engine.distribute_selection("h")}
+                className="flex size-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+              >
+                <Icon name="dist-h" size={14} />
+              </button>
+              <button
+                title="Distribute vertically"
+                onClick={() => engine.distribute_selection("v")}
+                className="flex size-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+              >
+                <Icon name="dist-v" size={14} />
+              </button>
+            </div>
+          )}
+        </Section>
         <Section title="Design">
           <p className="text-[12px] text-zinc-500">{selected.length} layers selected</p>
           <p className="mt-1 text-[11px] text-zinc-400">⌘G to group them</p>

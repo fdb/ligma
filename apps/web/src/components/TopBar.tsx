@@ -1,7 +1,8 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import type { Engine } from "../engine/pkg/ligma_core";
 import type { Scene, Tool } from "../types";
 import { Icon } from "./Icon";
+import { MenuBar, type Menu } from "./MenuBar";
 
 const tools: { id: Tool; icon: string; label: string; key: string }[] = [
   { id: "select", icon: "select", label: "Move", key: "V" },
@@ -17,17 +18,125 @@ export type SaveState = "idle" | "saving" | "saved" | "error";
 interface Props {
   engine: Engine;
   scene: Scene;
-  docId: string;
+  docName: string;
+  onRename: (name: string) => void;
   saveState: SaveState;
   onSave: () => void;
   viewport: () => { w: number; h: number };
 }
 
-export function TopBar({ engine, scene, docId, saveState, onSave, viewport }: Props) {
+export function TopBar({ engine, scene, docName, onRename, saveState, onSave, viewport }: Props) {
+  const navigate = useNavigate();
   const zoomAroundCenter = (zoom: number) => {
     const { w, h } = viewport();
     engine.set_zoom(zoom, w / 2, h / 2);
   };
+
+  const single = scene.selection.length === 1;
+  const multi = scene.selection.length >= 2;
+  const align = (mode: string) => ({
+    label: `Align ${mode === "hcenter" ? "horizontal centers" : mode === "vcenter" ? "vertical centers" : mode}`,
+    disabled: !multi,
+    action: () => engine.align_selection(mode),
+  });
+
+  const menus: Menu[] = [
+    {
+      title: "File",
+      items: [
+        {
+          label: "New design file",
+          action: async () => {
+            const res = await fetch("/api/documents", { method: "POST" });
+            const { id } = (await res.json()) as { id: string };
+            navigate({ to: "/d/$docId", params: { docId: id } });
+          },
+        },
+        { label: "Save", shortcut: "⌘S", action: onSave },
+      ],
+    },
+    {
+      title: "Edit",
+      items: [
+        { label: "Undo", shortcut: "⌘Z", action: () => engine.undo() },
+        { label: "Redo", shortcut: "⇧⌘Z", action: () => engine.redo() },
+        "---",
+        {
+          label: "Duplicate",
+          shortcut: "⌘D",
+          disabled: scene.selection.length === 0,
+          action: () => engine.duplicate_selection(),
+        },
+        {
+          label: "Delete",
+          shortcut: "⌫",
+          disabled: scene.selection.length === 0,
+          action: () => engine.delete_selection(),
+        },
+        "---",
+        {
+          label: "Copy as SVG",
+          disabled: !single,
+          action: () => navigator.clipboard.writeText(engine.export_svg(scene.selection[0])),
+        },
+      ],
+    },
+    {
+      title: "View",
+      items: [
+        { label: "Zoom in", action: () => zoomAroundCenter(scene.zoom * 1.25) },
+        { label: "Zoom out", action: () => zoomAroundCenter(scene.zoom / 1.25) },
+        {
+          label: "Zoom to 100%",
+          shortcut: "⌘0",
+          action: () => zoomAroundCenter(1),
+        },
+        {
+          label: "Zoom to fit",
+          shortcut: "⇧1",
+          action: () => {
+            const { w, h } = viewport();
+            engine.zoom_to_fit(w, h);
+          },
+        },
+      ],
+    },
+    {
+      title: "Object",
+      items: [
+        {
+          label: "Group selection",
+          shortcut: "⌘G",
+          disabled: !multi,
+          action: () => engine.group_selection(),
+        },
+        {
+          label: "Ungroup",
+          shortcut: "⇧⌘G",
+          disabled: scene.selection.length === 0,
+          action: () => engine.ungroup_selection(),
+        },
+        "---",
+        align("left"),
+        align("hcenter"),
+        align("right"),
+        align("top"),
+        align("vcenter"),
+        align("bottom"),
+        "---",
+        {
+          label: "Distribute horizontally",
+          disabled: scene.selection.length < 3,
+          action: () => engine.distribute_selection("h"),
+        },
+        {
+          label: "Distribute vertically",
+          disabled: scene.selection.length < 3,
+          action: () => engine.distribute_selection("v"),
+        },
+      ],
+    },
+  ];
 
   return (
     <header className="relative z-10 flex h-12 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-3">
@@ -43,7 +152,30 @@ export function TopBar({ engine, scene, docId, saveState, onSave, viewport }: Pr
         </Link>
         <div className="leading-tight">
           <div className="font-semibold tracking-tight text-zinc-900">Ligma</div>
-          <div className="font-mono text-[10px] text-zinc-400">{docId}</div>
+          <input
+            key={docName}
+            data-testid="doc-name"
+            defaultValue={docName}
+            placeholder="Untitled"
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={(e) => {
+              const name = e.currentTarget.value.trim();
+              if (name && name !== docName) onRename(name);
+              else e.currentTarget.value = docName;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                e.currentTarget.value = docName;
+                e.currentTarget.blur();
+              }
+              e.stopPropagation();
+            }}
+            className="-mx-1 w-36 truncate rounded-sm px-1 text-[11px] text-zinc-400 outline-none hover:bg-zinc-100 focus:bg-white focus:text-zinc-700 focus:ring-1 focus:ring-sky-400"
+          />
+        </div>
+        <div className="ml-2 border-l border-zinc-200 pl-2">
+          <MenuBar menus={menus} />
         </div>
       </div>
 

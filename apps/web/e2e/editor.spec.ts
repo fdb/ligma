@@ -268,6 +268,117 @@ test("v1 documents migrate to the paint model on load", async ({ page }) => {
   expect(fills).toEqual([{ color: "#ff0000", opacity: 1 }]);
 });
 
+test("option-drag copies a shape; one undo removes the copy", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+
+  await page.keyboard.down("Alt");
+  await drag(page, 300, 240, 520, 240);
+  await page.keyboard.up("Alt");
+  await expect(layers(page).getByText("Rectangle 1")).toHaveCount(2);
+
+  await page.keyboard.press("Meta+z");
+  await expect(layers(page).getByText("Rectangle 1")).toHaveCount(1);
+});
+
+test("arrange: align and distribute from the properties panel", async ({ page }) => {
+  await openNewDocument(page);
+  for (const [x, y] of [
+    [220, 180],
+    [330, 210],
+    [520, 250],
+  ] as const) {
+    await page.keyboard.press("r");
+    await drag(page, x, y, x + 40, y + 40);
+  }
+  await drag(page, 180, 140, 600, 330); // marquee all three
+
+  const ys = () =>
+    page.evaluate(() => JSON.parse((window as any).__engine.scene()).nodes.map((n: any) => n.y));
+  await page.getByTitle("Align top").click();
+  expect(new Set(await ys()).size).toBe(1);
+
+  await page.getByTitle("Distribute horizontally").click();
+  const xs = await page.evaluate(() =>
+    JSON.parse((window as any).__engine.scene()).nodes.map((n: any) => n.x),
+  );
+  const sorted = [...xs].sort((a: number, b: number) => a - b);
+  expect(sorted[1] - sorted[0]).toBeCloseTo(sorted[2] - sorted[1], 5);
+});
+
+test("menu bar drives commands; Copy as SVG fills the clipboard", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+
+  // Object menu: group is disabled with a single selection. Close by
+  // toggling the menu button — Escape would also clear the canvas
+  // selection via the global shortcut.
+  await page.getByRole("button", { name: "Object" }).click();
+  await expect(page.getByRole("button", { name: "Group selection" })).toBeDisabled();
+  await page.getByRole("button", { name: "Object" }).click();
+
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Copy as SVG" }).click();
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clip).toContain("<svg");
+  expect(clip).toContain("<rect");
+
+  // Edit > Duplicate works from the menu.
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Duplicate" }).click();
+  await expect(layers(page).getByText("Rectangle 1")).toHaveCount(2);
+});
+
+test("double-click edits text directly on the canvas", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250);
+  await expect(layers(page).getByText("Text 1")).toBeVisible();
+
+  const box = await canvasBox(page);
+  await page.mouse.dblclick(box.x + 320, box.y + 262);
+  const editor = page.getByTestId("text-editor");
+  await expect(editor).toBeVisible();
+  await editor.fill("Hello Ligma");
+  await editor.press("Enter");
+
+  const text = await page.evaluate(
+    () => JSON.parse((window as any).__engine.scene()).nodes[0].text,
+  );
+  expect(text).toBe("Hello Ligma");
+});
+
+test("frames rename by double-clicking their canvas label", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 500, 350);
+
+  const box = await canvasBox(page);
+  await page.mouse.dblclick(box.x + 215, box.y + 140); // the label above the frame
+  const editor = page.getByTestId("frame-name-editor");
+  await expect(editor).toBeVisible();
+  await editor.fill("Hero Section");
+  await editor.press("Enter");
+
+  await expect(layers(page).getByText("Hero Section")).toBeVisible();
+});
+
+test("renaming the document updates the HTML title and the file list", async ({ page }) => {
+  await openNewDocument(page);
+  await expect(page).toHaveTitle("Untitled – Ligma");
+
+  const nameField = page.getByTestId("doc-name");
+  await nameField.fill("Brand Board");
+  await nameField.press("Enter");
+  await expect(page).toHaveTitle("Brand Board – Ligma");
+
+  await page.getByTitle("Back to your files").click();
+  await expect(page.getByText("Brand Board")).toBeVisible();
+});
+
 test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");
