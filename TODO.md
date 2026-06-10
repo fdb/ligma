@@ -6,6 +6,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Session chat: a floating chat bubble in the editor; messages broadcast live to everyone in the file through the presence room (ephemeral — nothing stored), with an unread badge
+
 - Comments: press C (or the bubble in the toolbar) and click anywhere to pin a comment; pins carry the author's presence color/initial, open to read, and resolve away — synced live to every editor in the file
 
 - Text: font picker with a curated Google Fonts set (stylesheets load lazily; opening a document fetches the fonts it uses)

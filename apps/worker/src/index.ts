@@ -64,6 +64,9 @@ export class DocumentObject extends DurableObject<Bindings> {
     if (!meta) return;
     if (msg.t === "cursor" && typeof msg.x === "number" && typeof msg.y === "number") {
       this.broadcast({ t: "cursor", ...meta, x: msg.x, y: msg.y }, ws);
+    } else if (msg.t === "chat" && typeof (msg as { body?: string }).body === "string") {
+      const body = (msg as { body: string }).body.trim().slice(0, 500);
+      if (body) this.broadcast({ t: "chat", ...meta, body, ts: Date.now() }, ws);
     }
   }
 

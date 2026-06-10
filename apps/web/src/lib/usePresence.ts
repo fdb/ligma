@@ -10,6 +10,14 @@ export interface Peer {
   t: number; // last-seen timestamp
 }
 
+export interface ChatMessage {
+  id: string; // sender session id ("me" for own messages)
+  name: string;
+  color: string;
+  body: string;
+  ts: number;
+}
+
 const COLORS = ["#0ea5e9", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6", "#06b6d4", "#ec4899"];
 const NAMES = ["Lynx", "Otter", "Heron", "Fox", "Ibex", "Wren", "Tern", "Vole", "Stoat"];
 
@@ -41,6 +49,7 @@ export function usePresence(
   onComments?: () => void,
 ) {
   const [peers, setPeers] = useState<Record<string, Peer>>({});
+  const [chat, setChat] = useState<ChatMessage[]>([]);
   const sessionId = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const lastSent = useRef(0);
@@ -84,6 +93,9 @@ export function usePresence(
           versionCb.current();
         } else if (msg.t === "comments") {
           commentsCb.current?.();
+        } else if (msg.t === "chat") {
+          const m = msg as unknown as ChatMessage;
+          setChat((c) => [...c.slice(-99), m]);
         }
       };
       sock.onclose = () => {
@@ -110,6 +122,7 @@ export function usePresence(
       ws?.close();
       wsRef.current = null;
       setPeers({});
+      setChat([]);
     };
   }, [docId]);
 
@@ -122,5 +135,18 @@ export function usePresence(
     wsRef.current.send(JSON.stringify({ t: "cursor", x, y }));
   };
 
-  return { peers, reportCursor, sessionId };
+  /** Sends a chat line and echoes it locally (the server broadcast
+   * excludes the sender). */
+  const sendChat = (body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ t: "chat", body: trimmed }));
+    const me = identity();
+    setChat((c) => [
+      ...c.slice(-99),
+      { id: "me", name: me.name, color: me.color, body: trimmed, ts: Date.now() },
+    ]);
+  };
+
+  return { peers, chat, sendChat, reportCursor, sessionId };
 }

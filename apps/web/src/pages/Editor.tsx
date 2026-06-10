@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRouteApi, Link } from "@tanstack/react-router";
 import { CanvasView } from "../components/CanvasView";
+import { ChatPanel } from "../components/ChatPanel";
 import { LayersPanel } from "../components/LayersPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { TopBar, type SaveState } from "../components/TopBar";
@@ -62,7 +63,11 @@ export function Editor() {
 
   const [commentMode, setCommentMode] = useState(false);
   const { comments, addComment, resolveComment, refetch } = useComments(docId);
-  const { peers, reportCursor, sessionId } = usePresence(docId, onRemoteVersion, refetch);
+  const { peers, chat, sendChat, reportCursor, sessionId } = usePresence(
+    docId,
+    onRemoteVersion,
+    refetch,
+  );
   const toggleCommentMode = useCallback(() => setCommentMode((m) => !m), []);
 
   const onSave = useCallback(async () => {
@@ -156,7 +161,7 @@ export function Editor() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-white font-sans text-[13px] text-zinc-800">
+    <div className="relative flex h-full flex-col bg-white font-sans text-[13px] text-zinc-800">
       <TopBar
         engine={engine}
         scene={scene}
@@ -190,6 +195,7 @@ export function Editor() {
         />
         <PropertiesPanel engine={engine} scene={scene} />
       </div>
+      <ChatPanel chat={chat} onSend={sendChat} />
     </div>
   );
 }

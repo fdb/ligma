@@ -935,3 +935,31 @@ test("comments: pin, read, resolve, and live-sync to other editors", async ({
 
   await ctx2.close();
 });
+
+test("chat: messages broadcast live between editors", async ({ page, browser }) => {
+  const id = await openNewDocument(page);
+
+  const ctx2 = await browser.newContext();
+  const page2 = await ctx2.newPage();
+  page2.on("pageerror", (e) => errors.push(String(e)));
+  page2.on("console", (m) => {
+    if (m.type() === "error" && !/Failed to load resource.*404/.test(m.text()))
+      errors.push(m.text());
+  });
+  await page2.goto(`http://localhost:5173/d/${id}`);
+  await expect(page2.locator("canvas")).toBeVisible();
+  await page2.waitForTimeout(500); // let the presence socket open
+
+  await page.getByTestId("chat-toggle").click();
+  await page.getByTestId("chat-input").fill("hello from page one");
+  await page.getByTestId("chat-input").press("Enter");
+  await expect(page.getByTestId("chat-message")).toContainText("hello from page one");
+
+  // Unread badge on the second editor, then the message itself.
+  await page2.getByTestId("chat-toggle").click();
+  await expect(page2.getByTestId("chat-message")).toContainText("hello from page one", {
+    timeout: 10_000,
+  });
+
+  await ctx2.close();
+});
