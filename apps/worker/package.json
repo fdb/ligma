@@ -1,0 +1,22 @@
+{
+  "name": "ligma-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:e2e": "rm -rf .wrangler/e2e-state && wrangler d1 execute ligma --local --persist-to .wrangler/e2e-state --file=./schema.sql && wrangler dev --persist-to .wrangler/e2e-state",
+    "deploy": "npm run build --prefix ../web && wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:local": "wrangler d1 execute ligma --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute ligma --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "typescript": "~5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}

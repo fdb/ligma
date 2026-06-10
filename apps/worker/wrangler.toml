@@ -1,0 +1,28 @@
+name = "ligma"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+# The built frontend is served as static assets; only /api/* invokes the
+# worker. Unknown paths fall back to index.html (SPA routing).
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[[durable_objects.bindings]]
+name = "DOCUMENT"
+class_name = "DocumentObject"
+
+# SQLite-backed DOs work on the free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DocumentObject"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ligma"
+database_id = "7f1b570f-0328-44bc-8a6e-2b6af5f635c3"
+
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "ligma-docs"
