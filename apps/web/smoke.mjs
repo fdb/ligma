@@ -52,6 +52,16 @@ e.set_field(id, "w", 300);
 assert(scene().nodes[0].w === 300, "set_field updates width");
 e.set_fill(id, "#0ea5e9");
 assert(scene().nodes[0].fill === "#0ea5e9", "set_fill updates fill");
+
+// Edit transactions: a scrub's many live values coalesce into one undo step.
+e.begin_edit();
+for (let i = 1; i <= 30; i++) e.set_field_live(id, "w", 300 + i);
+e.commit_edit();
+assert(scene().nodes[0].w === 330, "set_field_live applies live values");
+e.undo();
+assert(scene().nodes[0].w === 300, "scrub coalesces into a single undo step");
+e.redo();
+assert(scene().nodes[0].w === 330, "redo restores the scrubbed value");
 e.duplicate_selection();
 assert(scene().nodes.length === 2, "duplicate adds a copy");
 e.delete_selection();

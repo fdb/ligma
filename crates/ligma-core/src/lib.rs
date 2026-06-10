@@ -500,6 +500,33 @@ impl Engine {
 
     pub fn set_field(&mut self, id: u32, field: &str, value: f64) {
         self.snapshot_now();
+        self.apply_field(id, field, value);
+        self.touch();
+    }
+
+    // Scrubbing a number control fires many value changes that must
+    // coalesce into a single undo step: begin_edit stages one snapshot,
+    // set_field_live applies values without snapshotting, commit_edit
+    // pushes the staged snapshot onto the undo stack.
+
+    pub fn begin_edit(&mut self) {
+        self.pending_undo = Some(self.nodes.clone());
+    }
+
+    pub fn set_field_live(&mut self, id: u32, field: &str, value: f64) {
+        self.apply_field(id, field, value);
+        self.touch();
+    }
+
+    pub fn commit_edit(&mut self) {
+        if let Some(snap) = self.pending_undo.take() {
+            self.undo.push(snap);
+            self.redo.clear();
+        }
+        self.touch();
+    }
+
+    fn apply_field(&mut self, id: u32, field: &str, value: f64) {
         if let Some(n) = self.node_mut(id) {
             match field {
                 "x" => n.x = value,
@@ -512,7 +539,6 @@ impl Engine {
                 _ => {}
             }
         }
-        self.touch();
     }
 
     pub fn set_fill(&mut self, id: u32, fill: &str) {

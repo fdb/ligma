@@ -131,6 +131,52 @@ test("draw shapes, edit properties, undo and delete", async ({ page }) => {
   await expect(layers(page).getByText("Ellipse 1")).toHaveCount(2);
 });
 
+test("number fields: expressions, scrub with capture, shift steps, undo coalescing", async ({
+  page,
+}) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280); // 100x80 rectangle
+
+  const w = () =>
+    page.evaluate(() => JSON.parse((window as any).__engine.scene()).nodes[0].w as number);
+
+  // Expressions evaluate on commit; invalid input reverts.
+  const wField = page.locator("label", { hasText: "W" }).locator("input");
+  await wField.fill("12*2+1");
+  await wField.press("Enter");
+  expect(await w()).toBe(25);
+  await expect(wField).toHaveValue("25");
+  await wField.fill("2*+");
+  await wField.press("Enter");
+  await expect(wField).toHaveValue("25");
+  expect(await w()).toBe(25);
+
+  // Scrub the label 300px right — far outside the tiny span, proving
+  // pointer capture holds — for +300 at 1/px.
+  const sb = (await page.locator('[data-scrub="w"]').boundingBox())!;
+  const cx = sb.x + sb.width / 2;
+  const cy = sb.y + sb.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 300, cy, { steps: 10 });
+  await page.mouse.up();
+  expect(await w()).toBe(325);
+
+  // The whole scrub is one undo step.
+  await page.keyboard.press("Meta+z");
+  expect(await w()).toBe(25);
+
+  // Shift while scrubbing: 10 per pixel.
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(cx + 20, cy, { steps: 4 });
+  await page.keyboard.up("Shift");
+  await page.mouse.up();
+  expect(await w()).toBe(225);
+});
+
 test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");
