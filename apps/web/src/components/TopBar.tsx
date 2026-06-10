@@ -21,11 +21,21 @@ interface Props {
   docName: string;
   onRename: (name: string) => void;
   saveState: SaveState;
+  dirty: boolean;
   onSave: () => void;
   viewport: () => { w: number; h: number };
 }
 
-export function TopBar({ engine, scene, docName, onRename, saveState, onSave, viewport }: Props) {
+export function TopBar({
+  engine,
+  scene,
+  docName,
+  onRename,
+  saveState,
+  dirty,
+  onSave,
+  viewport,
+}: Props) {
   const navigate = useNavigate();
   const zoomAroundCenter = (zoom: number) => {
     const { w, h } = viewport();
@@ -231,7 +241,15 @@ export function TopBar({ engine, scene, docName, onRename, saveState, onSave, vi
           disabled={saveState === "saving"}
           className="h-7 rounded-md bg-sky-500 px-3 text-[12px] font-semibold text-white shadow-sm transition-colors hover:bg-sky-600 disabled:opacity-60"
         >
-          {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved ✓" : saveState === "error" ? "Retry save" : "Save"}
+          {saveState === "saving"
+            ? "Saving…"
+            : saveState === "saved"
+              ? "Saved ✓"
+              : saveState === "error"
+                ? "Retry save"
+                : dirty
+                  ? "Save"
+                  : "Saved"}
         </button>
       </div>
     </header>

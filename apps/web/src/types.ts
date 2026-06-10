@@ -44,6 +44,7 @@ export interface Scene {
   panX: number;
   panY: number;
   generation: number;
+  docGeneration: number;
 }
 
 export function findNode(nodes: SceneNode[], id: number): SceneNode | null {

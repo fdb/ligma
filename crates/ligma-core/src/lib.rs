@@ -367,6 +367,7 @@ struct SceneInfo<'a> {
     pan_x: f64,
     pan_y: f64,
     generation: u32,
+    doc_generation: u32,
 }
 
 /// A snap guide produced while dragging: a vertical or horizontal line in
@@ -395,6 +396,7 @@ pub struct Engine {
     undo: Vec<Vec<Node>>,
     redo: Vec<Vec<Node>>,
     generation: u32,
+    doc_generation: u32,
 }
 
 #[wasm_bindgen]
@@ -418,11 +420,18 @@ impl Engine {
             undo: Vec::new(),
             redo: Vec::new(),
             generation: 0,
+            doc_generation: 0,
         }
     }
 
     pub fn generation(&self) -> u32 {
         self.generation
+    }
+
+    /// Bumped only by document mutations (never hover/selection/camera);
+    /// the autosave debounce keys off this.
+    pub fn doc_generation(&self) -> u32 {
+        self.doc_generation
     }
 
     pub fn scene(&self) -> String {
@@ -435,6 +444,7 @@ impl Engine {
             pan_x: self.pan_x,
             pan_y: self.pan_y,
             generation: self.generation,
+            doc_generation: self.doc_generation,
         })
         .unwrap_or_default()
     }
@@ -810,6 +820,7 @@ impl Engine {
 
     pub fn set_field_live(&mut self, id: u32, field: &str, value: f64) {
         self.apply_field(id, field, value);
+        self.touch_doc();
         self.touch();
     }
 
@@ -889,6 +900,7 @@ impl Engine {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.visible = visible;
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -896,6 +908,7 @@ impl Engine {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.locked = locked;
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -903,6 +916,7 @@ impl Engine {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.name = name.to_string();
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -1158,6 +1172,7 @@ impl Engine {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.export_presets.push(ExportPreset { scale: 1.0, format: ExportFormat::Png });
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -1167,6 +1182,7 @@ impl Engine {
                 n.export_presets.remove(index);
             }
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -1177,6 +1193,7 @@ impl Engine {
                 p.format = if format == "svg" { ExportFormat::Svg } else { ExportFormat::Png };
             }
         }
+        self.touch_doc();
         self.touch();
     }
 
@@ -1213,6 +1230,7 @@ impl Engine {
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.nodes, prev));
             self.retain_valid_selection();
+            self.touch_doc();
             self.touch();
         }
     }
@@ -1221,6 +1239,7 @@ impl Engine {
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.nodes, next));
             self.retain_valid_selection();
+            self.touch_doc();
             self.touch();
         }
     }
@@ -1508,6 +1527,7 @@ impl Engine {
         if let Some(snap) = self.pending_undo.take() {
             self.undo.push(snap);
             self.redo.clear();
+            self.touch_doc();
         }
     }
 
@@ -1515,10 +1535,15 @@ impl Engine {
     fn snapshot_now(&mut self) {
         self.undo.push(self.nodes.clone());
         self.redo.clear();
+        self.touch_doc();
     }
 
     fn touch(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn touch_doc(&mut self) {
+        self.doc_generation = self.doc_generation.wrapping_add(1);
     }
 }
 

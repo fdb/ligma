@@ -41,8 +41,17 @@ export function Editor() {
     [docId],
   );
 
+  const savedGen = useRef<number | null>(null);
+
   const onSave = useCallback(async () => {
     if (!engine) return;
+    const gen = engine.doc_generation();
+    // Nothing changed since the last save — don't write another version.
+    if (savedGen.current !== null && gen === savedGen.current) {
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 1500);
+      return;
+    }
     setSaveState("saving");
     try {
       const res = await fetch(`/api/documents/${docId}`, {
@@ -50,12 +59,52 @@ export function Editor() {
         headers: { "Content-Type": "application/json" },
         body: engine.to_json(),
       });
+      if (res.ok) savedGen.current = gen;
       setSaveState(res.ok ? "saved" : "error");
     } catch {
       setSaveState("error");
     }
     setTimeout(() => setSaveState("idle"), 1500);
   }, [engine, docId]);
+
+  // Autosave: any document mutation (doc_generation, which ignores
+  // hover/selection/camera) schedules a debounced save.
+  const docGen = scene?.docGeneration;
+  useEffect(() => {
+    if (!engine || docGen === undefined) return;
+    if (savedGen.current === null) {
+      savedGen.current = docGen; // baseline right after load
+      return;
+    }
+    if (docGen === savedGen.current) return;
+    const t = setTimeout(onSave, 1500);
+    return () => clearTimeout(t);
+  }, [engine, docGen, onSave]);
+
+  // Flush unsaved changes when leaving — closing the tab or navigating
+  // back to the file browser (SPA unmount).
+  useEffect(() => {
+    if (!engine) return;
+    const flush = () => {
+      if (savedGen.current !== null && engine.doc_generation() !== savedGen.current) {
+        savedGen.current = engine.doc_generation();
+        fetch(`/api/documents/${docId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: engine.to_json(),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [engine, docId]);
+
+  const dirty =
+    scene !== null && savedGen.current !== null && scene.docGeneration !== savedGen.current;
 
   if (notFound) {
     return (
@@ -89,6 +138,7 @@ export function Editor() {
         docName={docName}
         onRename={onRename}
         saveState={saveState}
+        dirty={dirty}
         onSave={onSave}
         viewport={() => ({
           w: canvasWrapRef.current?.clientWidth ?? 0,

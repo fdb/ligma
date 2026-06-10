@@ -190,6 +190,21 @@ assert(
   "distribute is one undo step",
 );
 
+// doc_generation: the autosave signal bumps on mutations only.
+const e6 = new Engine();
+e6.set_tool("rect");
+e6.pointer_down(0, 0, false, false);
+e6.pointer_move(50, 50);
+e6.pointer_up();
+const dg = e6.doc_generation();
+const rid = JSON.parse(e6.scene()).nodes[0].id;
+e6.pointer_move(25, 25); // hover
+e6.select(rid, false);
+e6.wheel(0, -50, true, 100, 100);
+assert(e6.doc_generation() === dg, "hover/select/zoom leave doc_generation untouched");
+e6.set_field(rid, "x", 99);
+assert(e6.doc_generation() > dg, "mutations bump doc_generation");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

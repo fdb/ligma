@@ -3,6 +3,11 @@
 - Organizing things in the outliner by dragging items around (e.g. dragging items into other items)
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - Text: making a text frame that does proper word wrapping
+- Text: select fonts and choose them from Google Fonts as well
+- If I draw an object in a frame, it should appear in the outliner as belonging to that frame
+- Color picker that selects colors from pixels already on the canvas
+- Cmd-+ Cmd-- to zoom in / zoom out
+- Local files are not saved anywhere?
 
 # DONE (things are moved here once they are done)
 

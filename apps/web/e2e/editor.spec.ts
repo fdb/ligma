@@ -379,6 +379,29 @@ test("renaming the document updates the HTML title and the file list", async ({ 
   await expect(page.getByText("Brand Board")).toBeVisible();
 });
 
+test("autosave: drawing persists across reload without pressing Save", async ({ page }) => {
+  const id = await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+
+  // The debounced autosave fires and flashes the saved state.
+  await expect(page.getByRole("button", { name: "Saved ✓" })).toBeVisible({ timeout: 5000 });
+
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+});
+
+test("navigating home flushes unsaved changes immediately", async ({ page }) => {
+  const id = await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+
+  // Leave before the autosave debounce elapses.
+  await page.getByTitle("Back to your files").click();
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+});
+
 test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");

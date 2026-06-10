@@ -73,7 +73,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `⌥`-drag | Drag a copy (original stays put) |
 | Double-click | Edit text in place · rename a frame via its label |
 | `⇧1` / `⌘0` | Zoom to fit / 100% |
-| `⌘S` | Save to server |
+| `⌘S` | Save now (documents also autosave after edits) |
 
 ## Roadmap (Figma 1.0 scope)
 
