@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+apps/web/src/engine/pkg/
+.wrangler/
+.DS_Store
+test-results/
+playwright-report/
+*.tsbuildinfo
