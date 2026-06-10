@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import { fontMetrics } from "../lib/fontMetrics";
+import type { Peer } from "../lib/usePresence";
 import { findNode, type Scene, type SceneNode, type Tool } from "../types";
 import { ContextMenu } from "./ContextMenu";
 import type { MenuItem } from "./MenuBar";
@@ -10,6 +11,8 @@ interface Props {
   scene: Scene;
   onSave: () => void;
   wrapRef: React.RefObject<HTMLDivElement | null>;
+  peers: Record<string, Peer>;
+  reportCursor: (x: number, y: number) => void;
 }
 
 const toolKeys: Record<string, Tool> = {
@@ -23,7 +26,7 @@ const toolKeys: Record<string, Tool> = {
 
 type Overlay = { id: number; kind: "text" | "name" } | null;
 
-export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
+export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -288,6 +291,8 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
           const { x, y } = pos(e);
           engine.pointer_move(x, y);
           e.currentTarget.style.cursor = engine.cursor(x, y);
+          const s = sceneRef.current;
+          reportCursor((x - s.panX) / s.zoom, (y - s.panY) / s.zoom);
         }}
         onPointerUp={() => engine.pointer_up()}
         onDoubleClick={onDoubleClick}
@@ -301,6 +306,29 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
           onClose={() => setCtxMenu(null)}
         />
       )}
+      {Object.values(peers).map((p) => (
+        <div
+          key={p.id}
+          data-testid="peer-cursor"
+          className="pointer-events-none absolute z-10 transition-[left,top] duration-75"
+          style={{ left: p.x * scene.zoom + scene.panX, top: p.y * scene.zoom + scene.panY }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+            <path
+              d="M2 1l5 13 2-5.5L14.5 7z"
+              fill={p.color}
+              stroke="#ffffff"
+              strokeWidth="1.2"
+            />
+          </svg>
+          <span
+            className="mt-0.5 ml-3 block w-max rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+            style={{ background: p.color }}
+          >
+            {p.name}
+          </span>
+        </div>
+      ))}
       {overlay &&
         overlayNode &&
         overlay.kind === "text" &&

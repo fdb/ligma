@@ -19,10 +19,12 @@ apps/web               React + Vite + TypeScript + Tailwind frontend
 `/` is the file browser (anonymous create, recent files); the editor lives at
 `/d/:id` (TanStack Router). Creating a file mints an 80-bit random id and a D1
 row. All content reads/writes route through a **Durable Object per document**
-— the single-writer authority that serializes version bumps today and will own
-WebSocket sessions for multiplayer later. Content lives in R2 as versioned,
-immutable JSON blobs (`docs/{id}/v{n}.json`); D1 holds metadata and the
-`current_version` pointer. Locally, wrangler emulates D1/R2/DOs via Miniflare
+— the single-writer authority that serializes version bumps and hosts the
+document's presence room: WebSocket sessions carrying live named cursors and
+"new version saved" notifications, so other editors see your cursor and pick
+up your saves in real time (local unsaved changes are never clobbered; last
+writer wins). Content lives in R2 as versioned, immutable JSON blobs
+(`docs/{id}/v{n}.json`); D1 holds metadata and the `current_version` pointer. Locally, wrangler emulates D1/R2/DOs via Miniflare
 — no Cloudflare account needed for development. (If `database_id` in
 wrangler.toml ever changes, re-run `npm run db:local`: local D1 state is keyed
 by that id.)
@@ -83,9 +85,9 @@ shapes (or a group) shows resize handles on the joint bounding box.
 
 ## Roadmap (Figma 1.0 scope)
 
-- Frame parenting (children clip + move with their frame)
+- Frame clipping (children clip to their frame)
 - Gradients and images
 - Vector pen tool and boolean operations
 - Components and instances
-- Multiplayer editing
+- Multiplayer co-editing (per-op sync; presence cursors already work)
 - Layer drag-reordering

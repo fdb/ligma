@@ -10,6 +10,9 @@
 
 # DONE (things are moved here once they are done)
 
+- Multiplayer presence: live named cursors over WebSockets (one presence room per document, hosted by its Durable Object), plus live document sync — when another editor saves, your copy refreshes automatically (unless you have unsaved changes; then last writer wins)
+- Blend modes (multiply, screen, overlay, … — all 16 CSS modes) per layer, in canvas rendering and SVG export
+
 - Custom color picker (SV square, hue + opacity sliders, hex input) with an eyedropper that samples pixels already on the canvas; picker drags coalesce into one undo step
 
 - Text: text bug: text shifts around when clicking it to edit on the canvas

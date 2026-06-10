@@ -677,3 +677,36 @@ test("blend modes composite on the canvas and survive reload", async ({ page }) 
     .poll(async () => (await sceneOf(page)).nodes[1].blendMode)
     .toBe("multiply");
 });
+
+test("multiplayer: peer cursors appear and saves sync live", async ({ page, browser }) => {
+  const id = await openNewDocument(page);
+
+  // A second editor in an isolated context (its own presence identity).
+  const ctx2 = await browser.newContext();
+  const page2 = await ctx2.newPage();
+  page2.on("pageerror", (e) => errors.push(String(e)));
+  page2.on("console", (m) => {
+    if (m.type() === "error" && !/Failed to load resource.*404/.test(m.text()))
+      errors.push(m.text());
+  });
+  await page2.goto(`http://localhost:5173/d/${id}`);
+  await expect(page2.locator("canvas")).toBeVisible();
+
+  // Moving the mouse on page 1 paints a labelled cursor on page 2.
+  for (let i = 0; i < 5; i++) {
+    await hoverSweep(page, 250 + i * 10, 250, 400 + i * 10, 320);
+    if (await page2.getByTestId("peer-cursor").first().isVisible()) break;
+    await page.waitForTimeout(300);
+  }
+  await expect(page2.getByTestId("peer-cursor").first()).toBeVisible();
+  await expect(page2.getByTestId("peer-cursor").getByText(/Guest/)).toBeVisible();
+
+  // Drawing on page 1 autosaves; the version broadcast refreshes page 2.
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+  await expect(page2.getByTestId("layers").getByText("Rectangle 1")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  await ctx2.close();
+});

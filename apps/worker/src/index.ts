@@ -20,13 +20,74 @@ function generateId(): string {
   return [...bytes].map((b) => ALPHABET[b & 31]).join("");
 }
 
+type PeerMeta = { id: string; name: string; color: string };
+
 /**
  * One Durable Object per document: the single-writer authority for its
- * content. Today that serializes version bumps (concurrent saves cannot
- * race); later it is where WebSocket sessions and the in-memory document
- * live for multiplayer. Content stays in R2, metadata in D1.
+ * content. It serializes version bumps (concurrent saves cannot race)
+ * and hosts the document's WebSocket presence sessions: live cursors
+ * plus "a new version was saved" notifications that let other editors
+ * refresh. Content stays in R2, metadata in D1.
  */
 export class DocumentObject extends DurableObject<Bindings> {
+  /** WebSocket join: /api/documents/:id/ws?name=…&color=… */
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("expected websocket", { status: 426 });
+    }
+    const url = new URL(request.url);
+    const meta: PeerMeta = {
+      id: crypto.randomUUID().slice(0, 8),
+      name: (url.searchParams.get("name") ?? "Guest").slice(0, 40),
+      color: (url.searchParams.get("color") ?? "#0ea5e9").slice(0, 16),
+    };
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    // Hibernation API: the runtime may evict this object between
+    // messages; the attachment survives and identifies the peer.
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment(meta);
+    server.send(JSON.stringify({ t: "hello", id: meta.id }));
+    this.broadcast({ t: "join", ...meta }, server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    if (typeof message !== "string" || message.length > 1024) return;
+    let msg: { t?: string; x?: number; y?: number };
+    try {
+      msg = JSON.parse(message);
+    } catch {
+      return;
+    }
+    const meta = ws.deserializeAttachment() as PeerMeta | null;
+    if (!meta) return;
+    if (msg.t === "cursor" && typeof msg.x === "number" && typeof msg.y === "number") {
+      this.broadcast({ t: "cursor", ...meta, x: msg.x, y: msg.y }, ws);
+    }
+  }
+
+  webSocketClose(ws: WebSocket) {
+    const meta = ws.deserializeAttachment() as PeerMeta | null;
+    if (meta) this.broadcast({ t: "leave", id: meta.id }, ws);
+  }
+
+  webSocketError(ws: WebSocket) {
+    this.webSocketClose(ws);
+  }
+
+  private broadcast(msg: unknown, except?: WebSocket) {
+    const s = JSON.stringify(msg);
+    for (const sock of this.ctx.getWebSockets()) {
+      if (sock === except) continue;
+      try {
+        sock.send(s);
+      } catch {
+        // Peer already gone; close events clean it up.
+      }
+    }
+  }
+
   async load(id: string): Promise<{ status: number; body: string }> {
     const row = await this.env.DB.prepare(
       "SELECT current_version FROM documents WHERE id = ?",
@@ -41,7 +102,7 @@ export class DocumentObject extends DurableObject<Bindings> {
     return { status: 200, body: await obj.text() };
   }
 
-  async save(id: string, body: string): Promise<void> {
+  async save(id: string, body: string, session?: string): Promise<void> {
     const row = await this.env.DB.prepare(
       "SELECT current_version FROM documents WHERE id = ?",
     )
@@ -62,6 +123,15 @@ export class DocumentObject extends DurableObject<Bindings> {
     )
       .bind(id, version, body.length)
       .run();
+
+    // Tell the other live editors a new version exists (the saver is
+    // excluded via its presence session id).
+    const saver = session
+      ? this.ctx
+          .getWebSockets()
+          .find((s) => (s.deserializeAttachment() as PeerMeta | null)?.id === session)
+      : undefined;
+    this.broadcast({ t: "version", v: version }, saver);
   }
 }
 
@@ -117,6 +187,13 @@ app.patch("/api/documents/:id", async (c) => {
   return c.body(null, 204);
 });
 
+// Presence WebSocket: forwarded straight to the document's Durable Object.
+app.get("/api/documents/:id/ws", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  return docStub(c, id).fetch(c.req.raw);
+});
+
 app.get("/api/documents/:id", async (c) => {
   const id = c.req.param("id");
   if (!ID_RE.test(id)) return c.text("invalid document id", 400);
@@ -138,7 +215,7 @@ app.put("/api/documents/:id", async (c) => {
     return c.text("document must be valid JSON", 400);
   }
 
-  await docStub(c, id).save(id, body);
+  await docStub(c, id).save(id, body, c.req.query("session"));
   return c.body(null, 204);
 });
 

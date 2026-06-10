@@ -5,6 +5,7 @@ import { LayersPanel } from "../components/LayersPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { TopBar, type SaveState } from "../components/TopBar";
 import { useEngine } from "../engine/useEngine";
+import { usePresence } from "../lib/usePresence";
 
 const route = getRouteApi("/d/$docId");
 
@@ -43,6 +44,23 @@ export function Editor() {
 
   const savedGen = useRef<number | null>(null);
 
+  // Another editor saved a new version: refresh our copy, but never
+  // clobber unsaved local changes (last writer wins on the next save).
+  const onRemoteVersion = useCallback(async () => {
+    if (!engine) return;
+    if (savedGen.current === null || engine.doc_generation() !== savedGen.current) return;
+    try {
+      const res = await fetch(`/api/documents/${docId}`);
+      if (!res.ok) return;
+      engine.load_json(await res.text());
+      savedGen.current = engine.doc_generation();
+    } catch {
+      /* next version event retries */
+    }
+  }, [engine, docId]);
+
+  const { peers, reportCursor, sessionId } = usePresence(docId, onRemoteVersion);
+
   const onSave = useCallback(async () => {
     if (!engine) return;
     const gen = engine.doc_generation();
@@ -54,18 +72,21 @@ export function Editor() {
     }
     setSaveState("saving");
     try {
-      const res = await fetch(`/api/documents/${docId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: engine.to_json(),
-      });
+      const res = await fetch(
+        `/api/documents/${docId}?session=${sessionId.current ?? ""}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: engine.to_json(),
+        },
+      );
       if (res.ok) savedGen.current = gen;
       setSaveState(res.ok ? "saved" : "error");
     } catch {
       setSaveState("error");
     }
     setTimeout(() => setSaveState("idle"), 1500);
-  }, [engine, docId]);
+  }, [engine, docId, sessionId]);
 
   // Autosave: any document mutation (doc_generation, which ignores
   // hover/selection/camera) schedules a debounced save.
@@ -88,7 +109,7 @@ export function Editor() {
     const flush = () => {
       if (savedGen.current !== null && engine.doc_generation() !== savedGen.current) {
         savedGen.current = engine.doc_generation();
-        fetch(`/api/documents/${docId}`, {
+        fetch(`/api/documents/${docId}?session=${sessionId.current ?? ""}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: engine.to_json(),
@@ -147,7 +168,14 @@ export function Editor() {
       />
       <div className="flex min-h-0 flex-1">
         <LayersPanel engine={engine} scene={scene} />
-        <CanvasView engine={engine} scene={scene} onSave={onSave} wrapRef={canvasWrapRef} />
+        <CanvasView
+          engine={engine}
+          scene={scene}
+          onSave={onSave}
+          wrapRef={canvasWrapRef}
+          peers={peers}
+          reportCursor={reportCursor}
+        />
         <PropertiesPanel engine={engine} scene={scene} />
       </div>
     </div>
