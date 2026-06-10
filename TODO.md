@@ -1,12 +1,13 @@
 # TODO / FEATURE WISHLIST
 
-- Organizing things in the outliner by dragging items around (e.g. dragging items into other items)
 - Text: select fonts and choose them from Google Fonts as well
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - more complex path operations like outline stroke, or even pathfinder operations like union/subtract,intersect,exclude (flatten + "frame selection" in the right-click menu wait on this)
 
 # DONE (things are moved here once they are done)
+
+- Outliner drag-reorganization: drag layer rows to reorder; drop onto a frame/group row to nest inside it (drop zones: above / into / below, with indicators)
 
 - Text: word wrapping to the text box (greedy, against real canvas metrics) with explicit newlines; Enter inserts a newline while editing, Escape commits
 - Text: horizontal (left/center/right) and vertical (top/middle/bottom) alignment, honored on canvas, in the inline editor, and in SVG export

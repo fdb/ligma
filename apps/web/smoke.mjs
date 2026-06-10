@@ -406,6 +406,44 @@ assert(
 );
 assert(svg14.includes('text-anchor="middle"'), "SVG export carries text-anchor");
 
+// Reparenting (outliner drag-reorganization).
+const e15 = new Engine();
+e15.set_tool("frame");
+e15.pointer_down(0, 0, false, false);
+e15.pointer_move(400, 300);
+e15.pointer_up();
+e15.set_tool("rect");
+e15.pointer_down(600, 0, false, false);
+e15.pointer_move(700, 100);
+e15.pointer_up();
+e15.set_tool("rect");
+e15.pointer_down(600, 200, false, false);
+e15.pointer_move(700, 300);
+e15.pointer_up();
+let s15 = JSON.parse(e15.scene());
+const [fid, r1, r2] = s15.nodes.map((n) => n.id);
+e15.reparent(r1, fid, 0); // into the frame
+s15 = JSON.parse(e15.scene());
+assert(s15.nodes.length === 2 && s15.nodes[0].children[0]?.id === r1, "reparent moves into a frame");
+e15.reparent(r2, fid, r1); // before r1 inside the frame
+s15 = JSON.parse(e15.scene());
+assert(
+  s15.nodes[0].children.map((n) => n.id).join() === `${r2},${r1}`,
+  "reparent inserts before a sibling",
+);
+e15.reparent(r1, 0, 0); // back to root
+s15 = JSON.parse(e15.scene());
+assert(s15.nodes.length === 2 && s15.nodes.at(-1).id === r1, "reparent back to root appends");
+e15.reparent(fid, r2, 0); // into own child's sibling? r2 is inside fid → must refuse
+s15 = JSON.parse(e15.scene());
+assert(s15.nodes[0].id === fid, "reparent into own subtree is refused");
+e15.reparent(r2, r1, 0); // rect is not a container → refused
+s15 = JSON.parse(e15.scene());
+assert(s15.nodes[0].children.length === 1, "reparent into a non-container is refused");
+e15.undo();
+s15 = JSON.parse(e15.scene());
+assert(s15.nodes[0].children.length === 2, "reparent is undoable");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

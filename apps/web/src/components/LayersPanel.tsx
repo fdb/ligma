@@ -1,10 +1,26 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import type { Scene, SceneNode } from "../types";
 import { Icon } from "./Icon";
 
 const kindIcon = (kind: SceneNode["kind"]) =>
   kind === "frame" ? "frame" : kind === "group" ? "group" : kind;
+
+type Zone = "above" | "below" | "into";
+
+/** The parent id (0 = root) and sibling list containing a node. */
+function locate(
+  nodes: SceneNode[],
+  id: number,
+  parent = 0,
+): { parent: number; list: SceneNode[] } | null {
+  for (const n of nodes) {
+    if (n.id === id) return { parent, list: nodes };
+    const found = locate(n.children, id, n.id);
+    if (found) return found;
+  }
+  return null;
+}
 
 function LayerRow({
   engine,
@@ -15,6 +31,11 @@ function LayerRow({
   onToggleExpand,
   editing,
   setEditing,
+  dropHint,
+  onDragStartRow,
+  onDragOverRow,
+  onDropRow,
+  onDragEndRow,
 }: {
   engine: Engine;
   scene: Scene;
@@ -24,16 +45,62 @@ function LayerRow({
   onToggleExpand: (id: number) => void;
   editing: number | null;
   setEditing: (id: number | null) => void;
+  dropHint: { id: number; zone: Zone } | null;
+  onDragStartRow: (id: number) => void;
+  onDragOverRow: (id: number, zone: Zone) => void;
+  onDropRow: (id: number) => void;
+  onDragEndRow: () => void;
 }) {
   const selected = scene.selection.includes(node.id);
   const hovered = scene.hovered === node.id;
   const isGroup = node.children.length > 0;
+  const isContainer = node.kind === "frame" || node.kind === "group";
   const open = expanded.has(node.id);
+  const hint = dropHint?.id === node.id ? dropHint.zone : null;
+
+  // The panel lists topmost-first, so "above" a row means later in the
+  // z-order list; the drop handler does that mapping.
+  const hintClass =
+    hint === "above"
+      ? "shadow-[inset_0_2px_0_0_#0ea5e9]"
+      : hint === "below"
+        ? "shadow-[inset_0_-2px_0_0_#0ea5e9]"
+        : hint === "into"
+          ? "ring-1 ring-sky-400 ring-inset bg-sky-50"
+          : "";
 
   return (
     <>
       <div
         data-layer={node.id}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", String(node.id));
+          e.dataTransfer.effectAllowed = "move";
+          onDragStartRow(node.id);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const r = e.currentTarget.getBoundingClientRect();
+          const f = (e.clientY - r.top) / r.height;
+          const zone: Zone = isContainer
+            ? f < 0.3
+              ? "above"
+              : f > 0.7
+                ? "below"
+                : "into"
+            : f < 0.5
+              ? "above"
+              : "below";
+          onDragOverRow(node.id, zone);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDropRow(node.id);
+        }}
+        onDragEnd={onDragEndRow}
         onPointerDown={(e) => engine.select(node.id, e.shiftKey)}
         onDoubleClick={() => setEditing(node.id)}
         className={`group/row flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1 ${
@@ -42,7 +109,7 @@ function LayerRow({
             : hovered
               ? "bg-zinc-50 text-zinc-700"
               : "text-zinc-600 hover:bg-zinc-50"
-        } ${!node.visible ? "opacity-45" : ""}`}
+        } ${!node.visible ? "opacity-45" : ""} ${hintClass}`}
         style={{ paddingLeft: 8 + depth * 14 }}
       >
         {isGroup ? (
@@ -113,6 +180,11 @@ function LayerRow({
             onToggleExpand={onToggleExpand}
             editing={editing}
             setEditing={setEditing}
+            dropHint={dropHint}
+            onDragStartRow={onDragStartRow}
+            onDragOverRow={onDragOverRow}
+            onDropRow={onDropRow}
+            onDragEndRow={onDragEndRow}
           />
         ))}
     </>
@@ -122,6 +194,8 @@ function LayerRow({
 export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene }) {
   const [editing, setEditing] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [dropHint, setDropHint] = useState<{ id: number; zone: Zone } | null>(null);
+  const dragId = useRef<number | null>(null);
 
   const toggleExpand = (id: number) =>
     setExpanded((prev) => {
@@ -130,6 +204,35 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
       else next.add(id);
       return next;
     });
+
+  const clearDrag = () => {
+    dragId.current = null;
+    setDropHint(null);
+  };
+
+  const handleDrop = (targetId: number) => {
+    const src = dragId.current;
+    const hint = dropHint;
+    clearDrag();
+    if (!src || !hint || hint.id !== targetId || src === targetId) return;
+    if (hint.zone === "into") {
+      engine.reparent(src, targetId, 0); // append = topmost inside
+      setExpanded((prev) => new Set(prev).add(targetId));
+      return;
+    }
+    const info = locate(scene.nodes, targetId);
+    if (!info) return;
+    const idx = info.list.findIndex((n) => n.id === targetId);
+    if (hint.zone === "above") {
+      // Visually above the row = next position up in z-order = inserted
+      // after it in the list, i.e. before its next sibling.
+      let before = info.list[idx + 1];
+      if (before?.id === src) before = info.list[idx + 2];
+      engine.reparent(src, info.parent, before?.id ?? 0);
+    } else {
+      engine.reparent(src, info.parent, targetId);
+    }
+  };
 
   // Topmost layer first, matching Figma's convention.
   const layers = [...scene.nodes].reverse();
@@ -142,7 +245,7 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
       <div className="px-4 pt-4 pb-2 text-[11px] font-semibold tracking-wide text-zinc-400 uppercase">
         Layers
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" onDragLeave={() => setDropHint(null)}>
         {layers.length === 0 && (
           <p className="px-2 py-1 text-[12px] leading-5 text-zinc-400">
             Nothing here yet. Draw a frame (F) or rectangle (R) to get started.
@@ -159,6 +262,13 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
             onToggleExpand={toggleExpand}
             editing={editing}
             setEditing={setEditing}
+            dropHint={dropHint}
+            onDragStartRow={(id) => (dragId.current = id)}
+            onDragOverRow={(id, zone) =>
+              setDropHint((h) => (h?.id === id && h.zone === zone ? h : { id, zone }))
+            }
+            onDropRow={handleDrop}
+            onDragEndRow={clearDrag}
           />
         ))}
       </div>

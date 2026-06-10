@@ -1333,6 +1333,46 @@ impl Engine {
         id
     }
 
+    /// Moves a node to a new parent (0 = the root list), inserted before
+    /// the sibling `before` in that parent's child list (0 = append, i.e.
+    /// topmost). Children keep absolute coordinates, so nothing shifts.
+    pub fn reparent(&mut self, id: u32, parent: u32, before: u32) {
+        if id == parent || find_node(&self.nodes, id).is_none() {
+            return;
+        }
+        // The target may not be inside the moved subtree.
+        if let Some(n) = find_node(&self.nodes, id) {
+            if parent != 0 && (parent == id || find_node(&n.children, parent).is_some()) {
+                return;
+            }
+        }
+        if parent != 0 {
+            match find_node(&self.nodes, parent) {
+                Some(p) if matches!(p.kind, NodeKind::Frame | NodeKind::Group) => {}
+                _ => return,
+            }
+        }
+        self.snapshot_now();
+        let path = path_to(&self.nodes, id).unwrap();
+        let i = *path.last().unwrap();
+        let node = list_at(&mut self.nodes, &path).remove(i);
+        let list = if parent == 0 {
+            &mut self.nodes
+        } else {
+            &mut find_node_mut(&mut self.nodes, parent).unwrap().children
+        };
+        let at = if before == 0 {
+            list.len()
+        } else {
+            list.iter().position(|n| n.id == before).unwrap_or(list.len())
+        };
+        list.insert(at, node);
+        dissolve_empty_groups(&mut self.nodes);
+        recompute_group_bounds(&mut self.nodes);
+        self.retain_valid_selection();
+        self.touch();
+    }
+
     // ----- clipboard & z-order -----
 
     /// Copies the selection into the engine's internal clipboard.

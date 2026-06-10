@@ -827,3 +827,48 @@ test("text wraps to its box and honors alignment", async ({ page }) => {
   await editor.press("Escape");
   expect((await sceneOf(page)).nodes[0].text).toBe("first\nsecond");
 });
+
+test("outliner: dragging rows reorders and reparents layers", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 500, 350);
+  await page.keyboard.press("r");
+  await drag(page, 600, 150, 700, 250); // outside the frame
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+
+  // HTML5 drag: Rectangle 1's row into the middle of Frame 1's row.
+  const srcRow = layers(page).locator("[data-layer]", { hasText: "Rectangle 1" });
+  const dstRow = layers(page).locator("[data-layer]", { hasText: "Frame 1" });
+  const dst = (await dstRow.boundingBox())!;
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await srcRow.dispatchEvent("dragstart", { dataTransfer });
+  await dstRow.dispatchEvent("dragover", {
+    dataTransfer,
+    clientX: dst.x + dst.width / 2,
+    clientY: dst.y + dst.height / 2, // middle = "into"
+  });
+  await dstRow.dispatchEvent("drop", { dataTransfer });
+
+  const s = await sceneOf(page);
+  expect(s.nodes.length).toBe(1);
+  expect(s.nodes[0].children.map((c: any) => c.name)).toEqual(["Rectangle 1"]);
+  // The drop auto-expands the frame, so the nested row is visible.
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+
+  // Drag it back out: below the frame row (bottom edge = "below" =
+  // earlier in z-order at the root).
+  const src2 = layers(page).locator("[data-layer]", { hasText: "Rectangle 1" });
+  const dt2 = await page.evaluateHandle(() => new DataTransfer());
+  await src2.dispatchEvent("dragstart", { dataTransfer: dt2 });
+  const dst2 = (await dstRow.boundingBox())!;
+  await dstRow.dispatchEvent("dragover", {
+    dataTransfer: dt2,
+    clientX: dst2.x + dst2.width / 2,
+    clientY: dst2.y + dst2.height - 2, // bottom = "below"
+  });
+  await dstRow.dispatchEvent("drop", { dataTransfer: dt2 });
+
+  const s2 = await sceneOf(page);
+  expect(s2.nodes.map((n: any) => n.name)).toEqual(["Rectangle 1", "Frame 1"]);
+  expect(s2.nodes[1].children.length).toBe(0);
+});
