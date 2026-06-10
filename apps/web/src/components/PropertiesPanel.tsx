@@ -357,6 +357,42 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
           <div className="grid grid-cols-2 gap-2">
             <NumberField label="S" value={n.fontSize} min={1} field="fontSize" {...common} />
           </div>
+          <div className="mt-2 flex items-center justify-between">
+            <div className="flex items-center gap-0.5">
+              {(["left", "center", "right"] as const).map((a) => (
+                <button
+                  key={a}
+                  title={`Align ${a}`}
+                  data-testid={`text-align-${a}`}
+                  onClick={() => engine.set_text_align(n.id, a)}
+                  className={`flex size-7 items-center justify-center rounded-md ${
+                    n.textAlign === a
+                      ? "bg-sky-50 text-sky-600"
+                      : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                  }`}
+                >
+                  <Icon name={a === "center" ? "align-hcenter" : `align-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-0.5">
+              {(["top", "middle", "bottom"] as const).map((v) => (
+                <button
+                  key={v}
+                  title={`Align ${v}`}
+                  data-testid={`text-valign-${v}`}
+                  onClick={() => engine.set_text_valign(n.id, v)}
+                  className={`flex size-7 items-center justify-center rounded-md ${
+                    n.textValign === v
+                      ? "bg-sky-50 text-sky-600"
+                      : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                  }`}
+                >
+                  <Icon name={v === "middle" ? "align-vcenter" : `align-${v}`} size={14} />
+                </button>
+              ))}
+            </div>
+          </div>
         </Section>
       )}
 

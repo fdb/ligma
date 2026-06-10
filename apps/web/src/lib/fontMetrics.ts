@@ -27,3 +27,26 @@ export function fontMetrics(size: number) {
     fbDescent: alpha.fontBoundingBoxDescent,
   };
 }
+
+/** Same greedy word wrap as the engine (ligma-core wrap_text), measured
+ * with the same font string, so the overlay editor's line count matches
+ * what the canvas drew. */
+export function wrapLines(text: string, size: number, maxW: number): string[] {
+  probe ??= document.createElement("canvas").getContext("2d")!;
+  probe.font = `${size}px 'Hanken Grotesk', sans-serif`;
+  const lines: string[] = [];
+  for (const para of text.split("\n")) {
+    let line = "";
+    for (const word of para.split(" ")) {
+      const cand = line === "" ? word : `${line} ${word}`;
+      if (probe.measureText(cand).width <= maxW || line === "") {
+        line = cand;
+      } else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    lines.push(line);
+  }
+  return lines;
+}

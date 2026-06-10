@@ -9,6 +9,8 @@
 //! of groups — a group's rect is derived as the union of its children.
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::f64::consts::TAU;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -60,6 +62,17 @@ fn default_stroke_weight() -> f64 {
 fn default_blend_mode() -> String {
     "normal".to_string()
 }
+fn default_text_align() -> String {
+    "left".to_string()
+}
+fn default_text_valign() -> String {
+    // Existing documents rendered text vertically centered; "middle"
+    // keeps them pixel-identical.
+    "middle".to_string()
+}
+
+/// Line height as a multiple of font size.
+const LINE_HEIGHT: f64 = 1.4;
 
 /// CSS blend modes shared by canvas (globalCompositeOperation) and SVG
 /// (mix-blend-mode). "normal" maps to canvas "source-over".
@@ -107,6 +120,10 @@ pub struct Node {
     pub corner_radius: f64,
     pub text: String,
     pub font_size: f64,
+    #[serde(default = "default_text_align")]
+    pub text_align: String,
+    #[serde(default = "default_text_valign")]
+    pub text_valign: String,
     /// Content hash of an uploaded asset (image nodes only); the bytes
     /// live in R2 and the browser keeps decoded elements in a JS cache.
     #[serde(default)]
@@ -396,6 +413,8 @@ fn migrate_v1(doc: v1::Document) -> Document {
             corner_radius: n.corner_radius,
             text: n.text,
             font_size: n.font_size,
+            text_align: default_text_align(),
+            text_valign: default_text_valign(),
             image: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
@@ -444,6 +463,10 @@ pub struct Engine {
     undo: Vec<Vec<Node>>,
     redo: Vec<Vec<Node>>,
     clipboard: Vec<Node>,
+    /// Wrapped lines per text node, captured during canvas rendering
+    /// (the only place real text measurement exists). SVG export reads
+    /// this so its line breaks match what the user saw.
+    text_layouts: RefCell<HashMap<u32, Vec<String>>>,
     generation: u32,
     doc_generation: u32,
 }
@@ -469,6 +492,7 @@ impl Engine {
             undo: Vec::new(),
             redo: Vec::new(),
             clipboard: Vec::new(),
+            text_layouts: RefCell::new(HashMap::new()),
             generation: 0,
             doc_generation: 0,
         }
@@ -1010,6 +1034,28 @@ impl Engine {
         self.touch();
     }
 
+    pub fn set_text_align(&mut self, id: u32, align: &str) {
+        if !["left", "center", "right"].contains(&align) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.text_align = align.to_string();
+        }
+        self.touch();
+    }
+
+    pub fn set_text_valign(&mut self, id: u32, valign: &str) {
+        if !["top", "middle", "bottom"].contains(&valign) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.text_valign = valign.to_string();
+        }
+        self.touch();
+    }
+
     // ----- visibility & locking -----
 
     pub fn set_visible(&mut self, id: u32, visible: bool) {
@@ -1102,6 +1148,8 @@ impl Engine {
             corner_radius: 0.0,
             text: String::new(),
             font_size: 16.0,
+            text_align: default_text_align(),
+            text_valign: default_text_valign(),
             image: String::new(),
             export_presets: Vec::new(),
             children,
@@ -1416,7 +1464,7 @@ impl Engine {
     pub fn render_export(&self, ctx: &CanvasRenderingContext2d, id: u32, scale: f64) {
         if let Some(n) = find_node(&self.nodes, id) {
             let _ = ctx.set_transform(scale, 0.0, 0.0, scale, -n.x * scale, -n.y * scale);
-            draw_node(ctx, n, 1.0, scale);
+            draw_node(ctx, n, 1.0, scale, &self.text_layouts);
         }
     }
 
@@ -1430,7 +1478,7 @@ impl Engine {
             w = n.w,
             h = n.h
         );
-        svg_node(n, -n.x, -n.y, &mut out);
+        svg_node(n, -n.x, -n.y, &mut out, &self.text_layouts.borrow());
         out.push_str("</svg>");
         out
     }
@@ -1472,7 +1520,7 @@ impl Engine {
             if self.editing == Some(n.id) && n.kind == NodeKind::Text {
                 continue;
             }
-            draw_node(ctx, n, 1.0, self.zoom);
+            draw_node(ctx, n, 1.0, self.zoom, &self.text_layouts);
         }
         ctx.set_global_alpha(1.0);
 
@@ -1732,6 +1780,8 @@ impl Engine {
             corner_radius: 0.0,
             text: if kind == NodeKind::Text { "Text".to_string() } else { String::new() },
             font_size: 16.0,
+            text_align: default_text_align(),
+            text_valign: default_text_valign(),
             image: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
@@ -1777,7 +1827,13 @@ impl Engine {
 
 // ----- canvas drawing (shared by editor render and export render) -----
 
-fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: f64) {
+fn draw_node(
+    ctx: &CanvasRenderingContext2d,
+    n: &Node,
+    parent_alpha: f64,
+    zoom: f64,
+    layouts: &RefCell<HashMap<u32, Vec<String>>>,
+) {
     if !n.visible {
         return;
     }
@@ -1789,7 +1845,7 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom);
+                draw_node(ctx, c, alpha, zoom, layouts);
             }
         }
         NodeKind::Frame => {
@@ -1809,7 +1865,7 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
                 rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
             });
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom);
+                draw_node(ctx, c, alpha, zoom, layouts);
             }
         }
         NodeKind::Rect => {
@@ -1834,17 +1890,41 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
         NodeKind::Text => {
             ctx.set_font(&format!("{}px 'Hanken Grotesk', sans-serif", n.font_size));
             ctx.set_text_baseline("top");
-            let ty = n.y + (n.h - n.font_size).max(0.0) / 2.0;
-            for p in &n.fills {
-                ctx.set_global_alpha(alpha * p.opacity);
-                ctx.set_fill_style_str(&p.color);
-                let _ = ctx.fill_text(&n.text, n.x, ty);
-            }
-            for p in &n.strokes {
-                ctx.set_global_alpha(alpha * p.opacity);
-                ctx.set_stroke_style_str(&p.color);
-                ctx.set_line_width(n.stroke_weight);
-                let _ = ctx.stroke_text(&n.text, n.x, ty);
+            let lh = n.font_size * LINE_HEIGHT;
+            let lines = wrap_text(ctx, &n.text, n.w);
+            let block = lines.len() as f64 * lh;
+            let y0 = match n.text_valign.as_str() {
+                "top" => n.y,
+                "bottom" => n.y + n.h - block,
+                _ => n.y + (n.h - block) / 2.0,
+            };
+            layouts.borrow_mut().insert(n.id, lines.clone());
+            for (i, line) in lines.iter().enumerate() {
+                // Each line slot is lh tall; the em box centers in it so a
+                // single line at "middle" matches the pre-wrap rendering.
+                let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0;
+                let tx = match n.text_align.as_str() {
+                    "center" => {
+                        let w = ctx.measure_text(line).map(|m| m.width()).unwrap_or(0.0);
+                        n.x + (n.w - w) / 2.0
+                    }
+                    "right" => {
+                        let w = ctx.measure_text(line).map(|m| m.width()).unwrap_or(0.0);
+                        n.x + n.w - w
+                    }
+                    _ => n.x,
+                };
+                for p in &n.fills {
+                    ctx.set_global_alpha(alpha * p.opacity);
+                    ctx.set_fill_style_str(&p.color);
+                    let _ = ctx.fill_text(line, tx, ty);
+                }
+                for p in &n.strokes {
+                    ctx.set_global_alpha(alpha * p.opacity);
+                    ctx.set_stroke_style_str(&p.color);
+                    ctx.set_line_width(n.stroke_weight);
+                    let _ = ctx.stroke_text(line, tx, ty);
+                }
             }
         }
         NodeKind::Image => {
@@ -1882,6 +1962,27 @@ fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: 
     if blended {
         let _ = ctx.set_global_composite_operation("source-over");
     }
+}
+
+/// Greedy word wrap against real canvas metrics. Explicit newlines are
+/// hard breaks; a word longer than the box gets its own overflowing line.
+fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_w: f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split(' ') {
+            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            let w = ctx.measure_text(&cand).map(|m| m.width()).unwrap_or(0.0);
+            if w <= max_w || line.is_empty() {
+                line = cand;
+            } else {
+                lines.push(std::mem::take(&mut line));
+                line = word.to_string();
+            }
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 fn stroke_paints(
@@ -1929,7 +2030,13 @@ fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, 
 
 // ----- SVG serialization -----
 
-fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
+fn svg_node(
+    n: &Node,
+    ox: f64,
+    oy: f64,
+    out: &mut String,
+    layouts: &HashMap<u32, Vec<String>>,
+) {
     if !n.visible {
         return;
     }
@@ -1944,7 +2051,7 @@ fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
-                svg_node(c, ox, oy, out);
+                svg_node(c, ox, oy, out, layouts);
             }
         }
         NodeKind::Frame | NodeKind::Rect => {
@@ -1963,7 +2070,7 @@ fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
                 ));
             }
             for c in &n.children {
-                svg_node(c, ox, oy, out);
+                svg_node(c, ox, oy, out, layouts);
             }
         }
         NodeKind::Ellipse => {
@@ -1982,14 +2089,31 @@ fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
             }
         }
         NodeKind::Text => {
-            // Baseline approximation: top-aligned text sits one em below
-            // its vertical-centering offset.
-            let ty = y + (n.h - n.font_size).max(0.0) / 2.0 + n.font_size * 0.8;
+            // Line breaks come from the last canvas render (the only
+            // place real measurement exists); fall back to raw lines.
+            let fallback: Vec<String> = n.text.split('\n').map(str::to_string).collect();
+            let lines = layouts.get(&n.id).unwrap_or(&fallback);
+            let lh = n.font_size * LINE_HEIGHT;
+            let block = lines.len() as f64 * lh;
+            let y0 = match n.text_valign.as_str() {
+                "top" => y,
+                "bottom" => y + n.h - block,
+                _ => y + (n.h - block) / 2.0,
+            };
+            let (anchor, tx) = match n.text_align.as_str() {
+                "center" => ("middle", x + n.w / 2.0),
+                "right" => ("end", x + n.w),
+                _ => ("start", x),
+            };
             for p in &n.fills {
-                out.push_str(&format!(
-                    r#"<text x="{x}" y="{ty}" font-family="Hanken Grotesk, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
-                    n.font_size, xml_escape(&p.color), p.opacity, xml_escape(&n.text)
-                ));
+                for (i, line) in lines.iter().enumerate() {
+                    // Baseline approximation: ~0.8em below the em top.
+                    let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0 + n.font_size * 0.8;
+                    out.push_str(&format!(
+                        r#"<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="Hanken Grotesk, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
+                        n.font_size, xml_escape(&p.color), p.opacity, xml_escape(line)
+                    ));
+                }
             }
         }
         NodeKind::Image => {

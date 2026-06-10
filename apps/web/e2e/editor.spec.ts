@@ -361,7 +361,7 @@ test("double-click edits text directly on the canvas", async ({ page }) => {
   const editor = page.getByTestId("text-editor");
   await expect(editor).toBeVisible();
   await editor.fill("Hello Ligma");
-  await editor.press("Enter");
+  await editor.press("Escape"); // Enter now inserts a newline; Escape commits
 
   const text = await page.evaluate(
     () => JSON.parse((window as any).__engine.scene()).nodes[0].text,
@@ -775,4 +775,55 @@ test("images: place via File menu, drag-drop, render and persist", async ({ page
   const cx2 = (n2.x + n2.w / 2) * s2.zoom + s2.panX;
   const cy2 = (n2.y + n2.h / 2) * s2.zoom + s2.panY;
   await expect.poll(() => pixelAt(cx2, cy2), { timeout: 10_000 }).toEqual([255, 0, 0]);
+});
+
+test("text wraps to its box and honors alignment", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250); // 160×24 default text box
+  await page
+    .locator("textarea")
+    .fill("the quick brown fox jumps over the lazy dog repeatedly");
+  await page.locator("textarea").blur();
+
+  // The canvas wrapped it: SVG export (which reads the layout captured
+  // by the last render) emits several <text> lines. Poll — the cache
+  // updates on the next animation frame after the edit.
+  const lineCount = () =>
+    page.evaluate(() => {
+      const e = (window as any).__engine;
+      const s = JSON.parse(e.scene());
+      const svg = e.export_svg(s.nodes[0].id) as string;
+      return (svg.match(/<text /g) ?? []).length;
+    });
+  await expect.poll(lineCount).toBeGreaterThan(1);
+
+  // Alignment buttons drive the engine and the export.
+  await page.getByTestId("text-align-center").click();
+  await page.getByTestId("text-valign-top").click();
+  const n = (await sceneOf(page)).nodes[0];
+  expect(n.textAlign).toBe("center");
+  expect(n.textValign).toBe("top");
+  const svg2 = await page.evaluate(() => {
+    const e = (window as any).__engine;
+    const s = JSON.parse(e.scene());
+    return e.export_svg(s.nodes[0].id) as string;
+  });
+  expect(svg2).toContain('text-anchor="middle"');
+
+  // Inline editing of multiline text: Enter inserts a newline.
+  const box = await canvasBox(page);
+  const sc = await sceneOf(page);
+  const tn = sc.nodes[0];
+  await page.mouse.dblclick(
+    box.x + (tn.x + tn.w / 2) * sc.zoom + sc.panX,
+    box.y + (tn.y + tn.h / 2) * sc.zoom + sc.panY,
+  );
+  const editor = page.getByTestId("text-editor");
+  await expect(editor).toBeVisible();
+  await editor.fill("first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+  await editor.press("Escape");
+  expect((await sceneOf(page)).nodes[0].text).toBe("first\nsecond");
 });

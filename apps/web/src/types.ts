@@ -32,6 +32,8 @@ export interface SceneNode {
   cornerRadius: number;
   text: string;
   fontSize: number;
+  textAlign: "left" | "center" | "right";
+  textValign: "top" | "middle" | "bottom";
   image: string;
   exportPresets: ExportPreset[];
   children: SceneNode[];

@@ -378,6 +378,34 @@ const rejected = await fetch(`${API}/api/assets`, {
 });
 assert(rejected.status === 415, "non-image uploads are rejected");
 
+// Text alignment: setters validate, persist, and default sensibly.
+const e14 = new Engine();
+e14.set_tool("text");
+e14.pointer_down(0, 0, false, false);
+e14.pointer_up();
+const tid14 = JSON.parse(e14.scene()).nodes[0].id;
+let tn14 = JSON.parse(e14.scene()).nodes[0];
+assert(tn14.textAlign === "left" && tn14.textValign === "middle", "text aligns default left/middle");
+e14.set_text_align(tid14, "center");
+e14.set_text_valign(tid14, "bottom");
+tn14 = JSON.parse(e14.scene()).nodes[0];
+assert(tn14.textAlign === "center" && tn14.textValign === "bottom", "alignment setters apply");
+e14.set_text_align(tid14, "justified-nonsense");
+assert(JSON.parse(e14.scene()).nodes[0].textAlign === "center", "invalid alignment ignored");
+e14.undo();
+assert(JSON.parse(e14.scene()).nodes[0].textValign === "middle", "alignment is undoable");
+const e14b = new Engine();
+e14b.load_json(e14.to_json());
+assert(JSON.parse(e14b.scene()).nodes[0].textAlign === "center", "alignment round-trips");
+// SVG export honors explicit newlines even without a canvas render.
+e14.set_text(tid14, "one\ntwo");
+const svg14 = e14.export_svg(tid14);
+assert(
+  svg14.includes(">one</text>") && svg14.includes(">two</text>"),
+  "SVG export splits text lines",
+);
+assert(svg14.includes('text-anchor="middle"'), "SVG export carries text-anchor");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

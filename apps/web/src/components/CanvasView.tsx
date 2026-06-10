@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
-import { fontMetrics } from "../lib/fontMetrics";
+import { fontMetrics, wrapLines } from "../lib/fontMetrics";
 import { placementSize, uploadImage } from "../lib/images";
 import type { Peer } from "../lib/usePresence";
 import { findNode, type Scene, type SceneNode, type Tool } from "../types";
@@ -355,17 +355,29 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
         overlayNode &&
         overlay.kind === "text" &&
         (() => {
-          // Align the input's glyphs exactly with where the canvas drew
-          // them: match the CSS line-box baseline to the canvas baseline
-          // (textBaseline="top" at the vertically-centered em top).
+          // Align the editor's glyphs exactly with where the canvas drew
+          // them. The canvas lays text in slots of 1.4em with the em box
+          // centered in each slot; CSS line boxes position glyphs by font
+          // bounding box, so shift the whole textarea by the measured
+          // difference — both grids share the same period, so every line
+          // stays aligned.
           const fs = overlayNode.fontSize * scene.zoom;
+          const slh = overlayNode.fontSize * 1.4 * scene.zoom;
           const m = fontMetrics(fs);
-          const boxH = m.fbAscent + m.fbDescent;
-          const emTop =
-            (overlayNode.y + Math.max(0, overlayNode.h - overlayNode.fontSize) / 2) * scene.zoom +
-            scene.panY;
+          const lineCount = wrapLines(overlayNode.text, fs, overlayNode.w * scene.zoom).length;
+          const block = lineCount * slh;
+          const boxTop = overlayNode.y * scene.zoom + scene.panY;
+          const boxH = overlayNode.h * scene.zoom;
+          const y0 =
+            overlayNode.textValign === "top"
+              ? boxTop
+              : overlayNode.textValign === "bottom"
+                ? boxTop + boxH - block
+                : boxTop + (boxH - block) / 2;
+          const top =
+            y0 + (slh - fs) / 2 + m.emAscent - (slh - m.fbAscent - m.fbDescent) / 2 - m.fbAscent;
           return (
-            <input
+            <textarea
               autoFocus
               data-testid="text-editor"
               defaultValue={overlayNode.text}
@@ -375,18 +387,20 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
                 closeOverlay();
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") closeOverlay();
+                // Enter inserts a newline (Figma behavior); Escape commits.
+                if (e.key === "Escape") e.currentTarget.blur();
                 e.stopPropagation();
               }}
-              className="absolute bg-transparent p-0 outline-none"
+              className="absolute resize-none overflow-hidden bg-transparent p-0 outline-none"
               style={{
                 left: overlayNode.x * scene.zoom + scene.panX,
-                top: emTop + m.emAscent - m.fbAscent,
-                width: Math.max(60, overlayNode.w * scene.zoom + 16),
-                height: boxH,
+                top,
+                width: overlayNode.w * scene.zoom,
+                height: Math.max(block, slh) + slh, // headroom for the line being typed
                 fontSize: fs,
-                lineHeight: `${boxH}px`,
+                lineHeight: `${slh}px`,
+                textAlign: overlayNode.textAlign,
+                whiteSpace: "pre-wrap",
                 fontFamily: "'Hanken Grotesk', sans-serif",
                 color: overlayNode.fills[0]?.color ?? "#18181b",
               }}
