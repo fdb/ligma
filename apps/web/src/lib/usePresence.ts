@@ -13,7 +13,7 @@ export interface Peer {
 const COLORS = ["#0ea5e9", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6", "#06b6d4", "#ec4899"];
 const NAMES = ["Lynx", "Otter", "Heron", "Fox", "Ibex", "Wren", "Tern", "Vole", "Stoat"];
 
-function identity(): { name: string; color: string } {
+export function identity(): { name: string; color: string } {
   const stored = localStorage.getItem("ligma-presence");
   if (stored) {
     try {
@@ -35,13 +35,19 @@ function identity(): { name: string; color: string } {
  * Object). Streams this editor's cursor out, collects remote cursors,
  * and invokes onRemoteVersion when another editor saves a new version.
  */
-export function usePresence(docId: string, onRemoteVersion: () => void) {
+export function usePresence(
+  docId: string,
+  onRemoteVersion: () => void,
+  onComments?: () => void,
+) {
   const [peers, setPeers] = useState<Record<string, Peer>>({});
   const sessionId = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const lastSent = useRef(0);
   const versionCb = useRef(onRemoteVersion);
   versionCb.current = onRemoteVersion;
+  const commentsCb = useRef(onComments);
+  commentsCb.current = onComments;
 
   useEffect(() => {
     const me = identity();
@@ -76,6 +82,8 @@ export function usePresence(docId: string, onRemoteVersion: () => void) {
           setPeers(({ [msg.id]: _gone, ...rest }) => rest);
         } else if (msg.t === "version") {
           versionCb.current();
+        } else if (msg.t === "comments") {
+          commentsCb.current?.();
         }
       };
       sock.onclose = () => {

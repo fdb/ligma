@@ -3,6 +3,8 @@ import type { Engine } from "../engine/pkg/ligma_core";
 import { fontMetrics, wrapLines } from "../lib/fontMetrics";
 import { placementSize, uploadImage } from "../lib/images";
 import type { Peer } from "../lib/usePresence";
+import type { CommentRow } from "../lib/useComments";
+import { CommentsLayer } from "./Comments";
 import { findNode, type Scene, type SceneNode, type Tool } from "../types";
 import { ContextMenu } from "./ContextMenu";
 import type { MenuItem } from "./MenuBar";
@@ -14,6 +16,12 @@ interface Props {
   wrapRef: React.RefObject<HTMLDivElement | null>;
   peers: Record<string, Peer>;
   reportCursor: (x: number, y: number) => void;
+  comments: CommentRow[];
+  commentMode: boolean;
+  onToggleCommentMode: () => void;
+  onExitCommentMode: () => void;
+  onAddComment: (x: number, y: number, body: string) => void;
+  onResolveComment: (id: string) => void;
 }
 
 const toolKeys: Record<string, Tool> = {
@@ -27,7 +35,20 @@ const toolKeys: Record<string, Tool> = {
 
 type Overlay = { id: number; kind: "text" | "name" } | null;
 
-export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor }: Props) {
+export function CanvasView({
+  engine,
+  scene,
+  onSave,
+  wrapRef,
+  peers,
+  reportCursor,
+  comments,
+  commentMode,
+  onToggleCommentMode,
+  onExitCommentMode,
+  onAddComment,
+  onResolveComment,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -137,8 +158,11 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
       } else if (e.key === "Backspace" || e.key === "Delete") {
         engine.delete_selection();
       } else if (e.key === "Escape") {
+        onExitCommentMode();
         engine.clear_selection();
         engine.set_tool("select");
+      } else if (!mod && e.key.toLowerCase() === "c") {
+        onToggleCommentMode();
       } else if (e.key.startsWith("Arrow")) {
         e.preventDefault();
         const step = e.shiftKey ? 10 : 1;
@@ -172,7 +196,7 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [engine, onSave, wrapRef]);
+  }, [engine, onSave, wrapRef, onToggleCommentMode, onExitCommentMode]);
 
   const pos = (e: React.PointerEvent | React.MouseEvent) => {
     const r = canvasRef.current!.getBoundingClientRect();
@@ -328,6 +352,14 @@ export function CanvasView({ engine, scene, onSave, wrapRef, peers, reportCursor
           onClose={() => setCtxMenu(null)}
         />
       )}
+      <CommentsLayer
+        scene={scene}
+        comments={comments}
+        mode={commentMode}
+        onExitMode={onExitCommentMode}
+        onAdd={onAddComment}
+        onResolve={onResolveComment}
+      />
       {Object.values(peers).map((p) => (
         <div
           key={p.id}

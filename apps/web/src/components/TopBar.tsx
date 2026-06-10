@@ -25,6 +25,8 @@ interface Props {
   saveState: SaveState;
   dirty: boolean;
   onSave: () => void;
+  commentMode: boolean;
+  onToggleCommentMode: () => void;
   viewport: () => { w: number; h: number };
 }
 
@@ -36,6 +38,8 @@ export function TopBar({
   saveState,
   dirty,
   onSave,
+  commentMode,
+  onToggleCommentMode,
   viewport,
 }: Props) {
   const navigate = useNavigate();
@@ -247,6 +251,19 @@ export function TopBar({
       </div>
 
       <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5 shadow-sm">
+        <button
+          title="Comment (C)"
+          data-testid="comment-tool"
+          onClick={onToggleCommentMode}
+          className={`flex size-8 items-center justify-center rounded-md transition-colors ${
+            commentMode
+              ? "bg-sky-500 text-white"
+              : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+          }`}
+        >
+          <Icon name="comment" />
+        </button>
+        <div className="mx-0.5 h-5 border-l border-zinc-200" />
         {tools.map((t) => (
           <button
             key={t.id}

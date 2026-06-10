@@ -76,6 +76,12 @@ export class DocumentObject extends DurableObject<Bindings> {
     this.webSocketClose(ws);
   }
 
+  /** Broadcast an app-level event (e.g. comments changed) to all
+   * presence sessions. Called by HTTP routes through the stub. */
+  async notify(msg: unknown): Promise<void> {
+    this.broadcast(msg);
+  }
+
   private broadcast(msg: unknown, except?: WebSocket) {
     const s = JSON.stringify(msg);
     for (const sock of this.ctx.getWebSockets()) {
@@ -220,6 +226,54 @@ app.get("/api/assets/:hash", async (c) => {
     // Content-addressed: safe to cache forever.
     "Cache-Control": "public, max-age=31536000, immutable",
   });
+});
+
+// ----- comments (pinned to canvas world coordinates) -----
+
+app.get("/api/documents/:id/comments", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, x, y, body, author, color, resolved, created_at FROM comments WHERE doc_id = ? ORDER BY created_at",
+  )
+    .bind(id)
+    .all();
+  return c.json(results);
+});
+
+app.post("/api/documents/:id/comments", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  const b = await c.req.json().catch(() => null);
+  const body = typeof b?.body === "string" ? b.body.trim().slice(0, 2000) : "";
+  if (!body || typeof b.x !== "number" || typeof b.y !== "number") {
+    return c.text("x, y and body required", 400);
+  }
+  const author = typeof b.author === "string" ? b.author.slice(0, 40) : "Guest";
+  const color = typeof b.color === "string" ? b.color.slice(0, 16) : "#0ea5e9";
+  const cid = crypto.randomUUID();
+  await c.env.DB.prepare(
+    "INSERT INTO comments (id, doc_id, x, y, body, author, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  )
+    .bind(cid, id, b.x, b.y, body, author, color)
+    .run();
+  await docStub(c, id).notify({ t: "comments" });
+  return c.json({ id: cid }, 201);
+});
+
+app.patch("/api/documents/:id/comments/:cid", async (c) => {
+  const id = c.req.param("id");
+  if (!ID_RE.test(id)) return c.text("invalid document id", 400);
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b?.resolved !== "boolean") return c.text("resolved required", 400);
+  const result = await c.env.DB.prepare(
+    "UPDATE comments SET resolved = ? WHERE id = ? AND doc_id = ?",
+  )
+    .bind(b.resolved ? 1 : 0, c.req.param("cid"), id)
+    .run();
+  if (!result.meta.changes) return c.text("not found", 404);
+  await docStub(c, id).notify({ t: "comments" });
+  return c.body(null, 204);
 });
 
 // Presence WebSocket: forwarded straight to the document's Durable Object.

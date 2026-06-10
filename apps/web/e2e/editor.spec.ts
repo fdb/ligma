@@ -898,3 +898,40 @@ test("text: choosing a Google Font loads it and re-renders", async ({ page }) =>
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Saved ✓")).toBeVisible();
 });
+
+test("comments: pin, read, resolve, and live-sync to other editors", async ({
+  page,
+  browser,
+}) => {
+  const id = await openNewDocument(page);
+
+  const ctx2 = await browser.newContext();
+  const page2 = await ctx2.newPage();
+  page2.on("pageerror", (e) => errors.push(String(e)));
+  page2.on("console", (m) => {
+    if (m.type() === "error" && !/Failed to load resource.*404/.test(m.text()))
+      errors.push(m.text());
+  });
+  await page2.goto(`http://localhost:5173/d/${id}`);
+  await expect(page2.locator("canvas")).toBeVisible();
+
+  // Comment mode (C), click the canvas, write, post.
+  await page.keyboard.press("c");
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + 300, box.y + 250);
+  await page.getByTestId("comment-input").fill("Make this pop");
+  await page.getByTestId("comment-post").click();
+  await expect(page.getByTestId("comment-pin")).toBeVisible();
+
+  // The presence broadcast delivers it to the other editor live.
+  await expect(page2.getByTestId("comment-pin")).toBeVisible({ timeout: 10_000 });
+
+  // Read and resolve from the second editor; both sides clear.
+  await page2.getByTestId("comment-pin").click();
+  await expect(page2.getByTestId("comment-popover")).toContainText("Make this pop");
+  await page2.getByRole("button", { name: "Resolve" }).click();
+  await expect(page2.getByTestId("comment-pin")).toHaveCount(0);
+  await expect(page.getByTestId("comment-pin")).toHaveCount(0, { timeout: 10_000 });
+
+  await ctx2.close();
+});

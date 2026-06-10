@@ -18,6 +18,9 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 3" />
     </>
   ),
+  comment: (
+    <path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 3v-3H4.5a2 2 0 0 1-2-2z" />
+  ),
   minus: <path d="M3.5 8h9" />,
   plus: <path d="M8 3.5v9M3.5 8h9" />,
   fit: <path d="M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3" />,

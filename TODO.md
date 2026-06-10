@@ -6,6 +6,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Comments: press C (or the bubble in the toolbar) and click anywhere to pin a comment; pins carry the author's presence color/initial, open to read, and resolve away — synced live to every editor in the file
+
 - Text: font picker with a curated Google Fonts set (stylesheets load lazily; opening a document fetches the fonts it uses)
 
 - Outliner drag-reorganization: drag layer rows to reorder; drop onto a frame/group row to nest inside it (drop zones: above / into / below, with indicators)

@@ -5,6 +5,7 @@ import { LayersPanel } from "../components/LayersPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { TopBar, type SaveState } from "../components/TopBar";
 import { useEngine } from "../engine/useEngine";
+import { useComments } from "../lib/useComments";
 import { usePresence } from "../lib/usePresence";
 
 const route = getRouteApi("/d/$docId");
@@ -59,7 +60,10 @@ export function Editor() {
     }
   }, [engine, docId]);
 
-  const { peers, reportCursor, sessionId } = usePresence(docId, onRemoteVersion);
+  const [commentMode, setCommentMode] = useState(false);
+  const { comments, addComment, resolveComment, refetch } = useComments(docId);
+  const { peers, reportCursor, sessionId } = usePresence(docId, onRemoteVersion, refetch);
+  const toggleCommentMode = useCallback(() => setCommentMode((m) => !m), []);
 
   const onSave = useCallback(async () => {
     if (!engine) return;
@@ -156,6 +160,8 @@ export function Editor() {
       <TopBar
         engine={engine}
         scene={scene}
+        commentMode={commentMode}
+        onToggleCommentMode={toggleCommentMode}
         docName={docName}
         onRename={onRename}
         saveState={saveState}
@@ -175,6 +181,12 @@ export function Editor() {
           wrapRef={canvasWrapRef}
           peers={peers}
           reportCursor={reportCursor}
+          comments={comments}
+          commentMode={commentMode}
+          onToggleCommentMode={toggleCommentMode}
+          onExitCommentMode={() => setCommentMode(false)}
+          onAddComment={addComment}
+          onResolveComment={resolveComment}
         />
         <PropertiesPanel engine={engine} scene={scene} />
       </div>
