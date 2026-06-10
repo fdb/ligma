@@ -594,3 +594,42 @@ test("multi-selection resizes through the joint bbox handles", async ({ page }) 
   expect(nodes[1].w).toBe(100);
   expect(nodes[1].x - nodes[0].x).toBe(200);
 });
+
+test("color picker: hex entry, SV drag coalesces undo, eyedropper samples the canvas", async ({
+  page,
+}) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 300, 300);
+
+  const fillOf = async (i: number) => (await sceneOf(page)).nodes[i].fills[0];
+
+  // Hex entry through the picker.
+  await page.getByTestId("swatch-fills-0").click();
+  const picker = page.getByTestId("color-picker");
+  await expect(picker).toBeVisible();
+  const hexField = page.getByTestId("picker-hex");
+  await hexField.fill("FF0000");
+  await hexField.press("Enter");
+  expect((await fillOf(0)).color).toBe("#ff0000");
+
+  // Dragging in the SV square fires many live updates → one undo step.
+  const sv = (await page.getByTestId("sv-square").boundingBox())!;
+  await page.mouse.move(sv.x + sv.width - 2, sv.y + 2);
+  await page.mouse.down();
+  await page.mouse.move(sv.x + sv.width - 2, sv.y + sv.height / 2, { steps: 10 });
+  await page.mouse.up();
+  expect((await fillOf(0)).color).not.toBe("#ff0000");
+  await page.keyboard.press("Meta+z");
+  expect((await fillOf(0)).color).toBe("#ff0000");
+  await page.keyboard.press("Escape");
+  await expect(picker).not.toBeVisible();
+
+  // Eyedropper: a second rect adopts the red rect's pixel color.
+  await page.keyboard.press("r");
+  await drag(page, 450, 200, 550, 300);
+  await page.getByTestId("swatch-fills-0").click();
+  await page.getByTitle("Pick color from canvas").click();
+  await clickCanvas(page, 250, 250); // sample inside the red rectangle
+  await expect.poll(async () => (await fillOf(1)).color).toBe("#ff0000");
+});

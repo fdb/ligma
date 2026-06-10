@@ -1,6 +1,8 @@
+import { useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import { findNode, type Paint, type Scene, type SceneNode } from "../types";
 import { exportNode } from "../lib/exporter";
+import { ColorPicker } from "./ColorPicker";
 import { Icon } from "./Icon";
 import { NumberField } from "./NumberField";
 
@@ -49,15 +51,32 @@ function PaintRow({
 }) {
   const update = (color: string, opacity: number) =>
     engine.update_paint(nodeId, kind, index, color, opacity);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const swatchRef = useRef<HTMLButtonElement>(null);
 
   return (
     <div className="mb-1.5 flex items-center gap-1.5 last:mb-0">
-      <input
-        type="color"
-        value={paint.color}
-        onChange={(e) => update(e.target.value, paint.opacity)}
+      <button
+        ref={swatchRef}
+        data-testid={`swatch-${kind}-${index}`}
+        title="Edit color"
+        onClick={() => setPickerOpen((o) => !o)}
         className="size-7 shrink-0 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
-      />
+      >
+        <span className="block size-full rounded-[4px]" style={{ background: paint.color }} />
+      </button>
+      {pickerOpen && (
+        <ColorPicker
+          color={paint.color}
+          opacity={paint.opacity}
+          anchor={swatchRef.current!.getBoundingClientRect()}
+          onGestureStart={() => engine.begin_edit()}
+          onLive={(c, o) => engine.update_paint_live(nodeId, kind, index, c, o)}
+          onGestureEnd={() => engine.commit_edit()}
+          onSet={(c, o) => engine.update_paint(nodeId, kind, index, c, o)}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       <div className="flex h-7 min-w-0 flex-1 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
         <input
           key={paint.color}

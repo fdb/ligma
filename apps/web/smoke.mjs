@@ -290,6 +290,25 @@ e10.undo();
 s10 = JSON.parse(e10.scene());
 assert(s10.nodes[0].w === 100 && s10.nodes[1].x === 200, "multi-resize is one undo step");
 
+// Paint transactions: a color-picker drag coalesces into one undo step.
+const e11 = new Engine();
+e11.set_tool("rect");
+e11.pointer_down(0, 0, false, false);
+e11.pointer_move(50, 50);
+e11.pointer_up();
+const rid11 = JSON.parse(e11.scene()).nodes[0].id;
+const before11 = JSON.parse(e11.scene()).nodes[0].fills[0].color;
+e11.begin_edit();
+for (let i = 0; i < 20; i++) e11.update_paint_live(rid11, "fills", 0, "#0ea5e9", 0.8);
+e11.commit_edit();
+const after11 = JSON.parse(e11.scene()).nodes[0].fills[0];
+assert(after11.color === "#0ea5e9" && after11.opacity === 0.8, "update_paint_live applies");
+e11.undo();
+assert(
+  JSON.parse(e11.scene()).nodes[0].fills[0].color === before11,
+  "picker drag is one undo step",
+);
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

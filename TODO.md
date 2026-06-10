@@ -5,11 +5,12 @@
 - Text: set text alignment (both horizontal and vertical)
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - Text: making a text frame that does proper word wrapping and also alignment and justification
-- Color picker that selects colors from pixels already on the canvas
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - more complex path operations like outline stroke, or even pathfinder operations like union/subtract,intersect,exclude (flatten + "frame selection" in the right-click menu wait on this)
 
 # DONE (things are moved here once they are done)
+
+- Custom color picker (SV square, hue + opacity sliders, hex input) with an eyedropper that samples pixels already on the canvas; picker drags coalesce into one undo step
 
 - Text: text bug: text shifts around when clicking it to edit on the canvas
 - If I draw an object in a frame, it appears in the outliner as belonging to that frame (and stays selectable inside it)

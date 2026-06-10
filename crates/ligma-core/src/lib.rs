@@ -939,6 +939,20 @@ impl Engine {
 
     pub fn update_paint(&mut self, id: u32, kind: &str, index: usize, color: &str, opacity: f64) {
         self.snapshot_now();
+        self.update_paint_live(id, kind, index, color, opacity);
+    }
+
+    /// Live paint update during a color-picker drag: no undo snapshot —
+    /// wrap the gesture in begin_edit/commit_edit so it coalesces into a
+    /// single undo step (same contract as set_field_live).
+    pub fn update_paint_live(
+        &mut self,
+        id: u32,
+        kind: &str,
+        index: usize,
+        color: &str,
+        opacity: f64,
+    ) {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             let list = if kind == "strokes" { &mut n.strokes } else { &mut n.fills };
             if let Some(p) = list.get_mut(index) {
