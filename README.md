@@ -27,7 +27,16 @@ immutable JSON blobs (`docs/{id}/v{n}.json`); D1 holds metadata and the
 wrangler.toml ever changes, re-run `npm run db:local`: local D1 state is keyed
 by that id.)
 
+Documents carry a `version` field; `load_json` migrates older formats forward
+(v1 flat `fill` strings → v2 paint lists) so the format can keep evolving.
+
 ## Develop
+
+```sh
+./scripts/dev.sh   # installs deps, builds WASM if missing, runs worker + vite
+```
+
+Or by hand:
 
 ```sh
 # 1. Build the engine (rerun after changing ligma-core)
@@ -59,6 +68,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | Drag / click | Draw a shape (click places a default size) |
 | `Space`-drag | Pan · scroll pans · `⌘`+scroll / pinch zooms |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
+| `⌘G` / `⇧⌘G` | Group / ungroup |
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |
 | `⇧1` / `⌘0` | Zoom to fit / 100% |
 | `⌘S` | Save to server |
@@ -66,8 +76,8 @@ cd apps/worker && npm run db:remote && npm run deploy
 ## Roadmap (Figma 1.0 scope)
 
 - Frame parenting (children clip + move with their frame)
-- Strokes, gradients, images
+- Gradients and images
 - Vector pen tool and boolean operations
 - Components and instances
 - Multiplayer editing
-- Layer drag-reordering (engine API `reorder` exists; no UI yet)
+- Layer drag-reordering

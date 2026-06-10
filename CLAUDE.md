@@ -15,6 +15,9 @@ Figma 1.0 feature scope only. Zinc grays + sky accent, early-web-tool feel.
   future multiplayer authority); routes are `/` (file browser) and
   `/d/:id` (editor, TanStack Router).
 - After changing `ligma-core`, rebuild WASM: `cd apps/web && npm run wasm`.
+- Documents are versioned (`version` field); changing the format means
+  bumping DOC_VERSION and adding a migration in `load_json` (see `mod v1`).
+- `./scripts/dev.sh` runs the full local stack (worker + vite).
 
 ## Testing — REQUIRED before handing off code
 

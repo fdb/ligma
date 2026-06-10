@@ -50,8 +50,15 @@ e.select(id, false);
 assert(scene().selection.includes(id), "select() targets a node");
 e.set_field(id, "w", 300);
 assert(scene().nodes[0].w === 300, "set_field updates width");
-e.set_fill(id, "#0ea5e9");
-assert(scene().nodes[0].fill === "#0ea5e9", "set_fill updates fill");
+e.update_paint(id, "fills", 0, "#0ea5e9", 0.5);
+assert(scene().nodes[0].fills[0].color === "#0ea5e9", "update_paint sets color");
+assert(scene().nodes[0].fills[0].opacity === 0.5, "each paint carries its own opacity");
+e.add_paint(id, "fills");
+assert(scene().nodes[0].fills.length === 2, "add_paint appends a second fill");
+e.remove_paint(id, "fills", 1);
+assert(scene().nodes[0].fills.length === 1, "remove_paint removes it");
+e.add_paint(id, "strokes");
+assert(scene().nodes[0].strokes.length === 1, "add_paint appends a stroke");
 
 // Edit transactions: a scrub's many live values coalesce into one undo step.
 e.begin_edit();
@@ -78,6 +85,50 @@ const put = await fetch(`${API}/api/documents/smoke-test`, { method: "PUT", body
 assert(put.status === 204, "worker accepts document save");
 const remote = await fetch(`${API}/api/documents/smoke-test`).then((r) => r.text());
 assert(e2.load_json(remote), "load_json accepts worker-stored document");
+
+// Groups: group two nodes, move the group (children follow), ungroup.
+e.set_tool("rect");
+e.pointer_down(500, 500, false);
+e.pointer_move(560, 560);
+e.pointer_up();
+const idB = scene().nodes.at(-1).id;
+e.select(id, false);
+e.select(idB, true);
+e.group_selection();
+let group = scene().nodes.find((n) => n.kind === "group");
+assert(group && group.children.length === 2, "group_selection nests both nodes");
+const childX = group.children[0].x;
+e.set_field(group.id, "x", group.x + 50);
+group = scene().nodes.find((n) => n.kind === "group");
+assert(group.children[0].x === childX + 50, "moving a group moves its children");
+e.set_visible(group.id, false);
+assert(scene().nodes.find((n) => n.kind === "group").visible === false, "set_visible hides");
+e.set_visible(group.id, true);
+e.set_locked(group.id, true);
+assert(scene().nodes.find((n) => n.kind === "group").locked === true, "set_locked locks");
+e.set_locked(group.id, false);
+e.ungroup_selection();
+assert(!scene().nodes.some((n) => n.kind === "group"), "ungroup dissolves the group");
+assert(scene().selection.length === 2, "ungroup selects the freed children");
+
+// Export: presets persist on the node; SVG serializes the subtree.
+e.add_export_preset(id);
+e.set_export_preset(id, 0, 2, "svg");
+const preset = JSON.parse(e.scene()).nodes.find((n) => n.id === id).exportPresets[0];
+assert(preset.scale === 2 && preset.format === "svg", "export preset saved on the node");
+const svg = e.export_svg(id);
+assert(svg.startsWith("<svg") && svg.includes("<rect"), "export_svg emits an SVG document");
+
+// Migration: a v1 document (flat fill string) loads as v2 paints.
+const v1 = JSON.stringify({
+  nodes: [{ id: 1, name: "Old", kind: "rect", x: 0, y: 0, w: 10, h: 10, fill: "#ff0000", opacity: 0.8, cornerRadius: 2, text: "", fontSize: 16 }],
+  next_id: 2,
+});
+const e3 = new Engine();
+assert(e3.load_json(v1), "v1 document loads");
+const migrated = JSON.parse(e3.scene()).nodes[0];
+assert(migrated.fills[0].color === "#ff0000", "v1 fill migrates to fills[0]");
+assert(migrated.opacity === 0.8 && migrated.visible === true, "v1 node fields survive migration");
 
 // Camera.
 e.wheel(0, -100, true, 400, 300);

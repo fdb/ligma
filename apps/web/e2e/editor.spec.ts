@@ -177,6 +177,97 @@ test("number fields: expressions, scrub with capture, shift steps, undo coalesci
   expect(await w()).toBe(225);
 });
 
+test("groups: ⌘G nesting, visibility toggle, ⇧⌘G ungroup", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+  await page.keyboard.press("r");
+  await drag(page, 400, 200, 500, 280);
+
+  // Marquee both, group them.
+  await drag(page, 200, 150, 550, 330);
+  await page.keyboard.press("Meta+g");
+  await expect(layers(page).getByText("Group 1")).toBeVisible();
+
+  // Expand the group, hide a child via the eye toggle.
+  const groupRow = page.locator("[data-layer]", { hasText: "Group 1" });
+  await groupRow.locator("button").first().click();
+  const childRow = page.locator("[data-layer]", { hasText: "Rectangle 1" });
+  await childRow.hover();
+  await childRow.locator("button").last().click();
+  const childVisible = await page.evaluate(() => {
+    const s = JSON.parse((window as any).__engine.scene());
+    const g = s.nodes.find((n: any) => n.kind === "group");
+    return g.children.find((c: any) => c.name === "Rectangle 1").visible;
+  });
+  expect(childVisible).toBe(false);
+
+  // Moving the group moves its children (absolute coords follow).
+  const before = await page.evaluate(() => {
+    const g = JSON.parse((window as any).__engine.scene()).nodes.find(
+      (n: any) => n.kind === "group",
+    );
+    return g.children.map((c: any) => c.x);
+  });
+  await page.keyboard.press("Shift+ArrowRight");
+  const after = await page.evaluate(() => {
+    const g = JSON.parse((window as any).__engine.scene()).nodes.find(
+      (n: any) => n.kind === "group",
+    );
+    return g.children.map((c: any) => c.x);
+  });
+  expect(after).toEqual(before.map((x: number) => x + 10));
+
+  await page.keyboard.press("Meta+Shift+g");
+  await expect(layers(page).getByText("Group 1")).not.toBeVisible();
+  await expect(layers(page).getByText("Rectangle 2")).toBeVisible();
+});
+
+test("export presets: saved per node, PNG and SVG download", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 280);
+
+  // Two presets: default 1x PNG, plus an SVG.
+  await page.getByTitle("Add export").click();
+  await page.getByTitle("Add export").click();
+  await page.locator("select").nth(3).selectOption("svg");
+
+  const downloads: string[] = [];
+  page.on("download", (d) => downloads.push(d.suggestedFilename()));
+  await page.getByRole("button", { name: /Export Rectangle 1/ }).click();
+  await expect.poll(() => downloads.length).toBe(2);
+  expect(downloads).toContain("Rectangle 1.png");
+  expect(downloads).toContain("Rectangle 1.svg");
+
+  // Presets persist with the document.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("canvas")).toBeVisible();
+  await layers(page).getByText("Rectangle 1").click();
+  await expect(page.getByRole("button", { name: /Export Rectangle 1/ })).toBeVisible();
+});
+
+test("v1 documents migrate to the paint model on load", async ({ page }) => {
+  const res = await page.request.post(`${API}/api/documents`);
+  const { id } = (await res.json()) as { id: string };
+  await page.request.put(`${API}/api/documents/${id}`, {
+    data: {
+      nodes: [
+        { id: 1, name: "Legacy", kind: "rect", x: 0, y: 0, w: 100, h: 100, fill: "#ff0000", opacity: 1, cornerRadius: 0, text: "", fontSize: 16 },
+      ],
+      next_id: 2,
+    },
+  });
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Legacy")).toBeVisible();
+  const fills = await page.evaluate(
+    () => JSON.parse((window as any).__engine.scene()).nodes[0].fills,
+  );
+  expect(fills).toEqual([{ color: "#ff0000", opacity: 1 }]);
+});
+
 test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");

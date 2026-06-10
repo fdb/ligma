@@ -1,22 +1,59 @@
 //! Ligma core: the editor engine.
 //!
-//! Owns the document (a flat, z-ordered list of nodes), the camera, the
-//! active tool's state machine, selection, undo history, and rendering.
-//! The JS side forwards raw input events and reads scene snapshots; it
-//! never mutates document state directly.
+//! Owns the document (a tree of nodes; top-level order is z-order), the
+//! camera, the active tool's state machine, selection, undo history, and
+//! rendering. The JS side forwards raw input events and reads scene
+//! snapshots; it never mutates document state directly.
+//!
+//! Coordinates are absolute document space everywhere, including children
+//! of groups — a group's rect is derived as the union of its children.
 
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 use wasm_bindgen::prelude::*;
 use web_sys::CanvasRenderingContext2d;
 
+const DOC_VERSION: u32 = 2;
+const EMPTY_DOC: &str = r#"{"version":2,"nodes":[],"next_id":1}"#;
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeKind {
     Frame,
+    Group,
     Rect,
     Ellipse,
     Text,
+}
+
+/// A single fill or stroke: a color with its own opacity.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Paint {
+    pub color: String,
+    pub opacity: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    Png,
+    Svg,
+}
+
+/// An export setting saved with the node, Figma-style (2x PNG, 1x SVG, …).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportPreset {
+    pub scale: f64,
+    pub format: ExportFormat,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_stroke_weight() -> f64 {
+    1.0
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -29,11 +66,23 @@ pub struct Node {
     pub y: f64,
     pub w: f64,
     pub h: f64,
-    pub fill: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    #[serde(default)]
+    pub locked: bool,
+    pub fills: Vec<Paint>,
+    #[serde(default)]
+    pub strokes: Vec<Paint>,
+    #[serde(default = "default_stroke_weight")]
+    pub stroke_weight: f64,
     pub opacity: f64,
     pub corner_radius: f64,
     pub text: String,
     pub font_size: f64,
+    #[serde(default)]
+    pub export_presets: Vec<ExportPreset>,
+    #[serde(default)]
+    pub children: Vec<Node>,
 }
 
 impl Node {
@@ -45,6 +94,124 @@ impl Node {
         self.x < x + w && self.x + self.w > x && self.y < y + h && self.y + self.h > y
     }
 }
+
+// ----- tree helpers -----
+
+fn find_node(nodes: &[Node], id: u32) -> Option<&Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(found) = find_node(&n.children, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_node_mut(nodes: &mut [Node], id: u32) -> Option<&mut Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(found) = find_node_mut(&mut n.children, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Index path from the root list to the node (last entry is the index in
+/// its parent's list).
+fn path_to(nodes: &[Node], id: u32) -> Option<Vec<usize>> {
+    for (i, n) in nodes.iter().enumerate() {
+        if n.id == id {
+            return Some(vec![i]);
+        }
+        if let Some(mut rest) = path_to(&n.children, id) {
+            let mut path = vec![i];
+            path.append(&mut rest);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// The sibling list containing the node a path points at.
+fn list_at<'a>(nodes: &'a mut Vec<Node>, path: &[usize]) -> &'a mut Vec<Node> {
+    let mut list = nodes;
+    for &i in &path[..path.len() - 1] {
+        list = &mut list[i].children;
+    }
+    list
+}
+
+fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
+    n.x += dx;
+    n.y += dy;
+    for c in &mut n.children {
+        shift_subtree(c, dx, dy);
+    }
+}
+
+fn round_subtree(n: &mut Node) {
+    n.x = n.x.round();
+    n.y = n.y.round();
+    n.w = n.w.round().max(1.0);
+    n.h = n.h.round().max(1.0);
+    for c in &mut n.children {
+        round_subtree(c);
+    }
+}
+
+fn assign_fresh_ids(n: &mut Node, next_id: &mut u32) {
+    n.id = *next_id;
+    *next_id += 1;
+    for c in &mut n.children {
+        assign_fresh_ids(c, next_id);
+    }
+}
+
+fn count_kind(nodes: &[Node], kind: NodeKind) -> usize {
+    nodes
+        .iter()
+        .map(|n| usize::from(n.kind == kind) + count_kind(&n.children, kind))
+        .sum()
+}
+
+/// Recompute every group's rect as the union of its children, bottom-up.
+fn recompute_group_bounds(nodes: &mut [Node]) {
+    for n in nodes {
+        recompute_group_bounds(&mut n.children);
+        if n.kind == NodeKind::Group && !n.children.is_empty() {
+            let min_x = n.children.iter().map(|c| c.x).fold(f64::MAX, f64::min);
+            let min_y = n.children.iter().map(|c| c.y).fold(f64::MAX, f64::min);
+            let max_x = n.children.iter().map(|c| c.x + c.w).fold(f64::MIN, f64::max);
+            let max_y = n.children.iter().map(|c| c.y + c.h).fold(f64::MIN, f64::max);
+            n.x = min_x;
+            n.y = min_y;
+            n.w = max_x - min_x;
+            n.h = max_y - min_y;
+        }
+    }
+}
+
+/// Remove groups that lost all their children (e.g. after deletes).
+fn dissolve_empty_groups(nodes: &mut Vec<Node>) {
+    for n in nodes.iter_mut() {
+        dissolve_empty_groups(&mut n.children);
+    }
+    nodes.retain(|n| n.kind != NodeKind::Group || !n.children.is_empty());
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// ----- tools & interaction -----
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
@@ -118,10 +285,74 @@ enum Drag {
     },
 }
 
+// ----- document & persistence -----
+
 #[derive(Serialize, Deserialize)]
 struct Document {
+    version: u32,
     nodes: Vec<Node>,
     next_id: u32,
+}
+
+/// The v1 document format: flat nodes with a single `fill` color string.
+mod v1 {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    pub struct Document {
+        pub nodes: Vec<Node>,
+        pub next_id: u32,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Node {
+        pub id: u32,
+        pub name: String,
+        pub kind: String,
+        pub x: f64,
+        pub y: f64,
+        pub w: f64,
+        pub h: f64,
+        pub fill: String,
+        pub opacity: f64,
+        pub corner_radius: f64,
+        pub text: String,
+        pub font_size: f64,
+    }
+}
+
+fn migrate_v1(doc: v1::Document) -> Document {
+    let nodes = doc
+        .nodes
+        .into_iter()
+        .map(|n| Node {
+            id: n.id,
+            name: n.name,
+            kind: match n.kind.as_str() {
+                "frame" => NodeKind::Frame,
+                "ellipse" => NodeKind::Ellipse,
+                "text" => NodeKind::Text,
+                _ => NodeKind::Rect,
+            },
+            x: n.x,
+            y: n.y,
+            w: n.w,
+            h: n.h,
+            visible: true,
+            locked: false,
+            fills: vec![Paint { color: n.fill, opacity: 1.0 }],
+            strokes: Vec::new(),
+            stroke_weight: 1.0,
+            opacity: n.opacity,
+            corner_radius: n.corner_radius,
+            text: n.text,
+            font_size: n.font_size,
+            export_presets: Vec::new(),
+            children: Vec::new(),
+        })
+        .collect();
+    Document { version: DOC_VERSION, nodes, next_id: doc.next_id }
 }
 
 #[derive(Serialize)]
@@ -190,30 +421,44 @@ impl Engine {
         .unwrap_or_default()
     }
 
-    // ----- document persistence -----
+    // ----- document persistence & migration -----
 
     pub fn to_json(&self) -> String {
         serde_json::to_string(&Document {
+            version: DOC_VERSION,
             nodes: self.nodes.clone(),
             next_id: self.next_id,
         })
-        .unwrap_or_default()
+        .unwrap_or_else(|_| EMPTY_DOC.to_string())
     }
 
+    /// Loads a document, migrating older formats forward as needed.
     pub fn load_json(&mut self, json: &str) -> bool {
-        match serde_json::from_str::<Document>(json) {
-            Ok(doc) => {
-                self.nodes = doc.nodes;
-                self.next_id = doc.next_id;
-                self.selection.clear();
-                self.hovered = None;
-                self.undo.clear();
-                self.redo.clear();
-                self.touch();
-                true
+        let value: serde_json::Value = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let version = value.get("version").and_then(|v| v.as_u64()).unwrap_or(1);
+        let doc = if version >= 2 {
+            match serde_json::from_value::<Document>(value) {
+                Ok(d) => d,
+                Err(_) => return false,
             }
-            Err(_) => false,
-        }
+        } else {
+            match serde_json::from_value::<v1::Document>(value) {
+                Ok(d) => migrate_v1(d),
+                Err(_) => return false,
+            }
+        };
+        self.nodes = doc.nodes;
+        self.next_id = doc.next_id;
+        recompute_group_bounds(&mut self.nodes);
+        self.selection.clear();
+        self.hovered = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.touch();
+        true
     }
 
     // ----- tools -----
@@ -235,7 +480,7 @@ impl Engine {
                 // Resize handles take priority, then nodes, then marquee.
                 if let Some(handle) = self.handle_at(sx, sy) {
                     let id = self.selection[0];
-                    let n = self.node(id).unwrap();
+                    let n = find_node(&self.nodes, id).unwrap();
                     let (nx, ny, nw, nh) = (n.x, n.y, n.w, n.h);
                     self.begin_mutation();
                     self.drag = Drag::Resize {
@@ -262,7 +507,7 @@ impl Engine {
                     let starts = self
                         .selection
                         .iter()
-                        .filter_map(|&sid| self.node(sid).map(|n| (sid, n.x, n.y)))
+                        .filter_map(|&sid| find_node(&self.nodes, sid).map(|n| (sid, n.x, n.y)))
                         .collect();
                     self.drag = Drag::Move { starts, ox: x, oy: y, moved: false };
                 } else {
@@ -308,7 +553,7 @@ impl Engine {
             }
             Drag::Draw { id, ox, oy } => {
                 let (id, ox, oy) = (*id, *ox, *oy);
-                if let Some(n) = self.node_mut(id) {
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
                     n.x = ox.min(x);
                     n.y = oy.min(y);
                     n.w = (x - ox).abs();
@@ -321,11 +566,12 @@ impl Engine {
                 let updates: Vec<(u32, f64, f64)> =
                     starts.iter().map(|&(id, nx, ny)| (id, nx + dx, ny + dy)).collect();
                 for (id, nx, ny) in updates {
-                    if let Some(n) = self.node_mut(id) {
-                        n.x = nx;
-                        n.y = ny;
+                    if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                        let (ddx, ddy) = (nx - n.x, ny - n.y);
+                        shift_subtree(n, ddx, ddy);
                     }
                 }
+                recompute_group_bounds(&mut self.nodes);
             }
             Drag::Resize { id, handle, sx: rx, sy: ry, sw, sh, ox, oy } => {
                 let (dx, dy) = (x - *ox, y - *oy);
@@ -351,12 +597,13 @@ impl Engine {
                     nh = -nh;
                 }
                 let id = *id;
-                if let Some(n) = self.node_mut(id) {
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
                     n.x = nx;
                     n.y = ny;
                     n.w = nw;
                     n.h = nh;
                 }
+                recompute_group_bounds(&mut self.nodes);
             }
             Drag::Marquee { ox, oy, cx, cy } => {
                 *cx = x;
@@ -366,7 +613,7 @@ impl Engine {
                 self.selection = self
                     .nodes
                     .iter()
-                    .filter(|n| n.intersects(mx, my, mw, mh))
+                    .filter(|n| n.visible && !n.locked && n.intersects(mx, my, mw, mh))
                     .map(|n| n.id)
                     .collect();
             }
@@ -377,7 +624,7 @@ impl Engine {
     pub fn pointer_up(&mut self) {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Draw { id, .. } => {
-                if let Some(n) = self.node_mut(id) {
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
                     // A click without a drag places a default-sized node.
                     if n.w < 4.0 && n.h < 4.0 {
                         let (w, h) = match n.kind {
@@ -388,7 +635,7 @@ impl Engine {
                         n.w = w;
                         n.h = h;
                     }
-                    round_rect_props(n);
+                    round_subtree(n);
                 }
                 self.commit_mutation();
                 self.tool = Tool::Select;
@@ -396,19 +643,21 @@ impl Engine {
             Drag::Move { starts, moved, .. } => {
                 if moved {
                     for (id, _, _) in starts {
-                        if let Some(n) = self.node_mut(id) {
-                            round_rect_props(n);
+                        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                            round_subtree(n);
                         }
                     }
+                    recompute_group_bounds(&mut self.nodes);
                     self.commit_mutation();
                 } else {
                     self.pending_undo = None;
                 }
             }
             Drag::Resize { id, .. } => {
-                if let Some(n) = self.node_mut(id) {
-                    round_rect_props(n);
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                    round_subtree(n);
                 }
+                recompute_group_bounds(&mut self.nodes);
                 self.commit_mutation();
             }
             _ => {
@@ -478,7 +727,7 @@ impl Engine {
         self.touch();
     }
 
-    // ----- selection & edits (panel-driven) -----
+    // ----- selection -----
 
     pub fn select(&mut self, id: u32, shift: bool) {
         if shift {
@@ -497,6 +746,8 @@ impl Engine {
         self.selection.clear();
         self.touch();
     }
+
+    // ----- field edits (panel-driven) -----
 
     pub fn set_field(&mut self, id: u32, field: &str, value: f64) {
         self.snapshot_now();
@@ -527,30 +778,85 @@ impl Engine {
     }
 
     fn apply_field(&mut self, id: u32, field: &str, value: f64) {
-        if let Some(n) = self.node_mut(id) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
             match field {
-                "x" => n.x = value,
-                "y" => n.y = value,
-                "w" => n.w = value.max(1.0),
-                "h" => n.h = value.max(1.0),
+                // Moving a group moves its subtree; its size is derived.
+                "x" => {
+                    let dx = value - n.x;
+                    shift_subtree(n, dx, 0.0);
+                }
+                "y" => {
+                    let dy = value - n.y;
+                    shift_subtree(n, 0.0, dy);
+                }
+                "w" if n.kind != NodeKind::Group => n.w = value.max(1.0),
+                "h" if n.kind != NodeKind::Group => n.h = value.max(1.0),
                 "opacity" => n.opacity = value.clamp(0.0, 1.0),
                 "cornerRadius" => n.corner_radius = value.max(0.0),
                 "fontSize" => n.font_size = value.max(1.0),
+                "strokeWeight" => n.stroke_weight = value.max(0.0),
                 _ => {}
             }
         }
+        recompute_group_bounds(&mut self.nodes);
     }
 
-    pub fn set_fill(&mut self, id: u32, fill: &str) {
+    // ----- paints -----
+
+    pub fn add_paint(&mut self, id: u32, kind: &str) {
         self.snapshot_now();
-        if let Some(n) = self.node_mut(id) {
-            n.fill = fill.to_string();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let paint = Paint { color: "#d4d4d8".to_string(), opacity: 1.0 };
+            if kind == "strokes" {
+                n.strokes.push(Paint { color: "#18181b".to_string(), ..paint });
+            } else {
+                n.fills.push(paint);
+            }
+        }
+        self.touch();
+    }
+
+    pub fn remove_paint(&mut self, id: u32, kind: &str, index: usize) {
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let list = if kind == "strokes" { &mut n.strokes } else { &mut n.fills };
+            if index < list.len() {
+                list.remove(index);
+            }
+        }
+        self.touch();
+    }
+
+    pub fn update_paint(&mut self, id: u32, kind: &str, index: usize, color: &str, opacity: f64) {
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let list = if kind == "strokes" { &mut n.strokes } else { &mut n.fills };
+            if let Some(p) = list.get_mut(index) {
+                p.color = color.to_string();
+                p.opacity = opacity.clamp(0.0, 1.0);
+            }
+        }
+        self.touch();
+    }
+
+    // ----- visibility & locking -----
+
+    pub fn set_visible(&mut self, id: u32, visible: bool) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.visible = visible;
+        }
+        self.touch();
+    }
+
+    pub fn set_locked(&mut self, id: u32, locked: bool) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.locked = locked;
         }
         self.touch();
     }
 
     pub fn set_name(&mut self, id: u32, name: &str) {
-        if let Some(n) = self.node_mut(id) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.name = name.to_string();
         }
         self.touch();
@@ -558,18 +864,126 @@ impl Engine {
 
     pub fn set_text(&mut self, id: u32, text: &str) {
         self.snapshot_now();
-        if let Some(n) = self.node_mut(id) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.text = text.to_string();
         }
         self.touch();
     }
+
+    // ----- grouping -----
+
+    /// Groups the selection. All selected nodes must share a parent list;
+    /// the group lands at the topmost member's z-position.
+    pub fn group_selection(&mut self) {
+        if self.selection.len() < 2 {
+            return;
+        }
+        let mut paths: Vec<Vec<usize>> = Vec::new();
+        for &id in &self.selection {
+            match path_to(&self.nodes, id) {
+                Some(p) => paths.push(p),
+                None => return,
+            }
+        }
+        let parent = paths[0][..paths[0].len() - 1].to_vec();
+        if !paths.iter().all(|p| p[..p.len() - 1] == parent[..]) {
+            return;
+        }
+        self.snapshot_now();
+
+        let mut indices: Vec<usize> = paths.iter().map(|p| *p.last().unwrap()).collect();
+        indices.sort_unstable();
+        let insert_at = indices[indices.len() - 1] + 1 - indices.len();
+
+        // Take children out in z-order (bottom to top).
+        let full_parent_path = {
+            let mut p = parent.clone();
+            p.push(0); // dummy leaf so list_at returns the parent's list
+            p
+        };
+        let list = list_at(&mut self.nodes, &full_parent_path);
+        let mut children = Vec::new();
+        for &i in indices.iter().rev() {
+            children.insert(0, list.remove(i));
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+        let name = format!("Group {}", count_kind(&self.nodes, NodeKind::Group) + 1);
+        let mut group = Node {
+            id,
+            name,
+            kind: NodeKind::Group,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            visible: true,
+            locked: false,
+            fills: Vec::new(),
+            strokes: Vec::new(),
+            stroke_weight: 1.0,
+            opacity: 1.0,
+            corner_radius: 0.0,
+            text: String::new(),
+            font_size: 16.0,
+            export_presets: Vec::new(),
+            children,
+        };
+        recompute_group_bounds(std::slice::from_mut(&mut group));
+
+        let list = list_at(&mut self.nodes, &full_parent_path);
+        list.insert(insert_at.min(list.len()), group);
+        self.selection = vec![id];
+        self.touch();
+    }
+
+    /// Dissolves selected groups, splicing children back in place.
+    pub fn ungroup_selection(&mut self) {
+        let group_ids: Vec<u32> = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|&id| {
+                find_node(&self.nodes, id).map(|n| n.kind == NodeKind::Group).unwrap_or(false)
+            })
+            .collect();
+        if group_ids.is_empty() {
+            return;
+        }
+        self.snapshot_now();
+        let mut new_selection = Vec::new();
+        for id in group_ids {
+            if let Some(path) = path_to(&self.nodes, id) {
+                let index = *path.last().unwrap();
+                let list = list_at(&mut self.nodes, &path);
+                let group = list.remove(index);
+                new_selection.extend(group.children.iter().map(|c| c.id));
+                for (offset, child) in group.children.into_iter().enumerate() {
+                    list.insert(index + offset, child);
+                }
+            }
+        }
+        recompute_group_bounds(&mut self.nodes);
+        self.selection = new_selection;
+        self.touch();
+    }
+
+    // ----- destructive ops -----
 
     pub fn delete_selection(&mut self) {
         if self.selection.is_empty() {
             return;
         }
         self.snapshot_now();
-        self.nodes.retain(|n| !self.selection.contains(&n.id));
+        for id in self.selection.clone() {
+            if let Some(path) = path_to(&self.nodes, id) {
+                let index = *path.last().unwrap();
+                list_at(&mut self.nodes, &path).remove(index);
+            }
+        }
+        dissolve_empty_groups(&mut self.nodes);
+        recompute_group_bounds(&mut self.nodes);
         self.selection.clear();
         self.hovered = None;
         self.touch();
@@ -581,20 +995,18 @@ impl Engine {
         }
         self.snapshot_now();
         let mut new_ids = Vec::new();
-        let copies: Vec<Node> = self
-            .nodes
-            .iter()
-            .filter(|n| self.selection.contains(&n.id))
-            .cloned()
-            .collect();
-        for mut n in copies {
-            n.id = self.next_id;
-            self.next_id += 1;
-            n.x += 16.0;
-            n.y += 16.0;
-            new_ids.push(n.id);
-            self.nodes.push(n);
+        for id in self.selection.clone() {
+            if let Some(path) = path_to(&self.nodes, id) {
+                let index = *path.last().unwrap();
+                let list = list_at(&mut self.nodes, &path);
+                let mut copy = list[index].clone();
+                assign_fresh_ids(&mut copy, &mut self.next_id);
+                shift_subtree(&mut copy, 16.0, 16.0);
+                new_ids.push(copy.id);
+                list.insert(index + 1, copy);
+            }
         }
+        recompute_group_bounds(&mut self.nodes);
         self.selection = new_ids;
         self.touch();
     }
@@ -604,24 +1016,68 @@ impl Engine {
             return;
         }
         self.snapshot_now();
-        let ids = self.selection.clone();
-        for id in ids {
-            if let Some(n) = self.node_mut(id) {
-                n.x += dx;
-                n.y += dy;
+        for id in self.selection.clone() {
+            if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                shift_subtree(n, dx, dy);
+            }
+        }
+        recompute_group_bounds(&mut self.nodes);
+        self.touch();
+    }
+
+    // ----- export presets -----
+
+    pub fn add_export_preset(&mut self, id: u32) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.export_presets.push(ExportPreset { scale: 1.0, format: ExportFormat::Png });
+        }
+        self.touch();
+    }
+
+    pub fn remove_export_preset(&mut self, id: u32, index: usize) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            if index < n.export_presets.len() {
+                n.export_presets.remove(index);
             }
         }
         self.touch();
     }
 
-    /// Move a node to a new z-index (position in document order).
-    pub fn reorder(&mut self, id: u32, to: usize) {
-        if let Some(from) = self.nodes.iter().position(|n| n.id == id) {
-            self.snapshot_now();
-            let n = self.nodes.remove(from);
-            self.nodes.insert(to.min(self.nodes.len()), n);
-            self.touch();
+    pub fn set_export_preset(&mut self, id: u32, index: usize, scale: f64, format: &str) {
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            if let Some(p) = n.export_presets.get_mut(index) {
+                p.scale = scale.clamp(0.25, 8.0);
+                p.format = if format == "svg" { ExportFormat::Svg } else { ExportFormat::Png };
+            }
         }
+        self.touch();
+    }
+
+    // ----- export rendering -----
+
+    /// Renders one node's subtree at `scale` into a context whose canvas is
+    /// sized ceil(w*scale) × ceil(h*scale). Transparent background; no
+    /// selection chrome.
+    pub fn render_export(&self, ctx: &CanvasRenderingContext2d, id: u32, scale: f64) {
+        if let Some(n) = find_node(&self.nodes, id) {
+            let _ = ctx.set_transform(scale, 0.0, 0.0, scale, -n.x * scale, -n.y * scale);
+            draw_node(ctx, n, 1.0, scale);
+        }
+    }
+
+    /// Serializes one node's subtree as a standalone SVG document.
+    pub fn export_svg(&self, id: u32) -> String {
+        let Some(n) = find_node(&self.nodes, id) else {
+            return String::new();
+        };
+        let mut out = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#,
+            w = n.w,
+            h = n.h
+        );
+        svg_node(n, -n.x, -n.y, &mut out);
+        out.push_str("</svg>");
+        out
     }
 
     // ----- undo -----
@@ -653,53 +1109,14 @@ impl Engine {
         let _ = ctx.scale(self.zoom, self.zoom);
 
         for n in &self.nodes {
-            ctx.set_global_alpha(n.opacity);
-            match n.kind {
-                NodeKind::Frame => {
-                    ctx.set_shadow_color("rgba(24, 24, 27, 0.10)");
-                    ctx.set_shadow_blur(3.0 * dpr);
-                    ctx.set_shadow_offset_y(1.0 * dpr);
-                    ctx.set_fill_style_str(&n.fill);
-                    fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
-                    ctx.set_shadow_color("transparent");
-                    ctx.set_shadow_blur(0.0);
-                    ctx.set_shadow_offset_y(0.0);
-                }
-                NodeKind::Rect => {
-                    ctx.set_fill_style_str(&n.fill);
-                    fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
-                }
-                NodeKind::Ellipse => {
-                    ctx.set_fill_style_str(&n.fill);
-                    ctx.begin_path();
-                    let _ = ctx.ellipse(
-                        n.x + n.w / 2.0,
-                        n.y + n.h / 2.0,
-                        n.w / 2.0,
-                        n.h / 2.0,
-                        0.0,
-                        0.0,
-                        TAU,
-                    );
-                    ctx.fill();
-                }
-                NodeKind::Text => {
-                    ctx.set_fill_style_str(&n.fill);
-                    ctx.set_font(&format!(
-                        "{}px 'Hanken Grotesk', sans-serif",
-                        n.font_size
-                    ));
-                    ctx.set_text_baseline("top");
-                    let _ = ctx.fill_text(&n.text, n.x, n.y + (n.h - n.font_size).max(0.0) / 2.0);
-                }
-            }
+            draw_node(ctx, n, 1.0, self.zoom);
         }
         ctx.set_global_alpha(1.0);
 
         // Hover highlight.
         if let Some(id) = self.hovered {
             if !self.selection.contains(&id) {
-                if let Some(n) = self.node(id) {
+                if let Some(n) = find_node(&self.nodes, id) {
                     ctx.set_stroke_style_str("#38bdf8");
                     ctx.set_line_width(1.5 / self.zoom);
                     ctx.stroke_rect(n.x, n.y, n.w, n.h);
@@ -709,11 +1126,11 @@ impl Engine {
 
         // Selection outlines + handles.
         for &id in &self.selection {
-            if let Some(n) = self.node(id) {
+            if let Some(n) = find_node(&self.nodes, id) {
                 ctx.set_stroke_style_str("#0ea5e9");
                 ctx.set_line_width(1.5 / self.zoom);
                 ctx.stroke_rect(n.x, n.y, n.w, n.h);
-                if self.selection.len() == 1 {
+                if self.selection.len() == 1 && n.kind != NodeKind::Group {
                     let hs = 7.0 / self.zoom;
                     for (hx, hy) in HANDLES {
                         let (px, py) = (n.x + hx * n.w - hs / 2.0, n.y + hy * n.h - hs / 2.0);
@@ -743,7 +1160,7 @@ impl Engine {
         ctx.set_font("11px 'Hanken Grotesk', sans-serif");
         ctx.set_text_baseline("alphabetic");
         for n in &self.nodes {
-            if n.kind == NodeKind::Frame {
+            if n.kind == NodeKind::Frame && n.visible {
                 let selected = self.selection.contains(&n.id);
                 ctx.set_fill_style_str(if selected { "#0284c7" } else { "#71717a" });
                 let _ = ctx.fill_text(
@@ -769,25 +1186,25 @@ impl Engine {
         self.zoom = new_zoom;
     }
 
-    fn node(&self, id: u32) -> Option<&Node> {
-        self.nodes.iter().find(|n| n.id == id)
-    }
-
-    fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
-        self.nodes.iter_mut().find(|n| n.id == id)
-    }
-
-    /// Topmost node under a world-space point.
+    /// Topmost top-level node under a world-space point. Hidden and locked
+    /// nodes are not clickable.
     fn hit_test(&self, x: f64, y: f64) -> Option<u32> {
-        self.nodes.iter().rev().find(|n| n.contains(x, y)).map(|n| n.id)
+        self.nodes
+            .iter()
+            .rev()
+            .find(|n| n.visible && !n.locked && n.contains(x, y))
+            .map(|n| n.id)
     }
 
-    /// Resize handle under a screen-space point (single selection only).
+    /// Resize handle under a screen-space point (single non-group selection).
     fn handle_at(&self, sx: f64, sy: f64) -> Option<usize> {
         if self.selection.len() != 1 {
             return None;
         }
-        let n = self.node(self.selection[0])?;
+        let n = find_node(&self.nodes, self.selection[0])?;
+        if n.kind == NodeKind::Group {
+            return None;
+        }
         let grab = 6.0;
         HANDLES.iter().position(|(hx, hy)| {
             let px = (n.x + hx * n.w) * self.zoom + self.pan_x;
@@ -799,9 +1216,10 @@ impl Engine {
     fn add_node(&mut self, kind: NodeKind, x: f64, y: f64, w: f64, h: f64) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        let count = self.nodes.iter().filter(|n| n.kind == kind).count() + 1;
+        let count = count_kind(&self.nodes, kind) + 1;
         let (name, fill) = match kind {
             NodeKind::Frame => (format!("Frame {count}"), "#ffffff"),
+            NodeKind::Group => (format!("Group {count}"), "#ffffff"),
             NodeKind::Rect => (format!("Rectangle {count}"), "#d4d4d8"),
             NodeKind::Ellipse => (format!("Ellipse {count}"), "#d4d4d8"),
             NodeKind::Text => (format!("Text {count}"), "#18181b"),
@@ -814,18 +1232,24 @@ impl Engine {
             y,
             w,
             h,
-            fill: fill.to_string(),
+            visible: true,
+            locked: false,
+            fills: vec![Paint { color: fill.to_string(), opacity: 1.0 }],
+            strokes: Vec::new(),
+            stroke_weight: 1.0,
             opacity: 1.0,
             corner_radius: 0.0,
             text: if kind == NodeKind::Text { "Text".to_string() } else { String::new() },
             font_size: 16.0,
+            export_presets: Vec::new(),
+            children: Vec::new(),
         });
         id
     }
 
     fn retain_valid_selection(&mut self) {
-        let ids: Vec<u32> = self.nodes.iter().map(|n| n.id).collect();
-        self.selection.retain(|id| ids.contains(id));
+        let nodes = &self.nodes;
+        self.selection.retain(|&id| find_node(nodes, id).is_some());
         self.hovered = None;
     }
 
@@ -853,25 +1277,181 @@ impl Engine {
     }
 }
 
-fn round_rect_props(n: &mut Node) {
-    n.x = n.x.round();
-    n.y = n.y.round();
-    n.w = n.w.round().max(1.0);
-    n.h = n.h.round().max(1.0);
-}
+// ----- canvas drawing (shared by editor render and export render) -----
 
-fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    if r <= 0.0 {
-        ctx.fill_rect(x, y, w, h);
+fn draw_node(ctx: &CanvasRenderingContext2d, n: &Node, parent_alpha: f64, zoom: f64) {
+    if !n.visible {
         return;
     }
+    let alpha = parent_alpha * n.opacity;
+    match n.kind {
+        NodeKind::Group => {
+            for c in &n.children {
+                draw_node(ctx, c, alpha, zoom);
+            }
+        }
+        NodeKind::Frame => {
+            ctx.set_shadow_color("rgba(24, 24, 27, 0.10)");
+            ctx.set_shadow_blur(3.0);
+            ctx.set_shadow_offset_y(1.0);
+            for p in &n.fills {
+                ctx.set_global_alpha(alpha * p.opacity);
+                ctx.set_fill_style_str(&p.color);
+                fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+                ctx.set_shadow_color("transparent");
+            }
+            ctx.set_shadow_color("transparent");
+            ctx.set_shadow_blur(0.0);
+            ctx.set_shadow_offset_y(0.0);
+            stroke_paints(ctx, n, alpha, |ctx| {
+                rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+            });
+            for c in &n.children {
+                draw_node(ctx, c, alpha, zoom);
+            }
+        }
+        NodeKind::Rect => {
+            for p in &n.fills {
+                ctx.set_global_alpha(alpha * p.opacity);
+                ctx.set_fill_style_str(&p.color);
+                fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+            }
+            stroke_paints(ctx, n, alpha, |ctx| {
+                rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+            });
+        }
+        NodeKind::Ellipse => {
+            for p in &n.fills {
+                ctx.set_global_alpha(alpha * p.opacity);
+                ctx.set_fill_style_str(&p.color);
+                ellipse_path(ctx, n);
+                ctx.fill();
+            }
+            stroke_paints(ctx, n, alpha, |ctx| ellipse_path(ctx, n));
+        }
+        NodeKind::Text => {
+            ctx.set_font(&format!("{}px 'Hanken Grotesk', sans-serif", n.font_size));
+            ctx.set_text_baseline("top");
+            let ty = n.y + (n.h - n.font_size).max(0.0) / 2.0;
+            for p in &n.fills {
+                ctx.set_global_alpha(alpha * p.opacity);
+                ctx.set_fill_style_str(&p.color);
+                let _ = ctx.fill_text(&n.text, n.x, ty);
+            }
+            for p in &n.strokes {
+                ctx.set_global_alpha(alpha * p.opacity);
+                ctx.set_stroke_style_str(&p.color);
+                ctx.set_line_width(n.stroke_weight);
+                let _ = ctx.stroke_text(&n.text, n.x, ty);
+            }
+        }
+    }
+    ctx.set_global_alpha(1.0);
+}
+
+fn stroke_paints(
+    ctx: &CanvasRenderingContext2d,
+    n: &Node,
+    alpha: f64,
+    trace: impl Fn(&CanvasRenderingContext2d),
+) {
+    if n.stroke_weight <= 0.0 {
+        return;
+    }
+    for p in &n.strokes {
+        ctx.set_global_alpha(alpha * p.opacity);
+        ctx.set_stroke_style_str(&p.color);
+        ctx.set_line_width(n.stroke_weight);
+        trace(ctx);
+        ctx.stroke();
+    }
+}
+
+fn ellipse_path(ctx: &CanvasRenderingContext2d, n: &Node) {
     ctx.begin_path();
+    let _ = ctx.ellipse(n.x + n.w / 2.0, n.y + n.h / 2.0, n.w / 2.0, n.h / 2.0, 0.0, 0.0, TAU);
+}
+
+fn rounded_rect_path(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    let r = r.min(w / 2.0).min(h / 2.0);
+    ctx.begin_path();
+    if r <= 0.0 {
+        ctx.rect(x, y, w, h);
+        return;
+    }
     ctx.move_to(x + r, y);
     let _ = ctx.arc_to(x + w, y, x + w, y + h, r);
     let _ = ctx.arc_to(x + w, y + h, x, y + h, r);
     let _ = ctx.arc_to(x, y + h, x, y, r);
     let _ = ctx.arc_to(x, y, x + w, y, r);
     ctx.close_path();
+}
+
+fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    rounded_rect_path(ctx, x, y, w, h, r);
     ctx.fill();
+}
+
+// ----- SVG serialization -----
+
+fn svg_node(n: &Node, ox: f64, oy: f64, out: &mut String) {
+    if !n.visible {
+        return;
+    }
+    let opacity = if n.opacity < 1.0 { format!(r#" opacity="{}""#, n.opacity) } else { String::new() };
+    out.push_str(&format!("<g{opacity}>"));
+    let (x, y) = (n.x + ox, n.y + oy);
+    match n.kind {
+        NodeKind::Group => {
+            for c in &n.children {
+                svg_node(c, ox, oy, out);
+            }
+        }
+        NodeKind::Frame | NodeKind::Rect => {
+            let rx = n.corner_radius.min(n.w / 2.0).min(n.h / 2.0);
+            let rx_attr = if rx > 0.0 { format!(r#" rx="{rx}""#) } else { String::new() };
+            for p in &n.fills {
+                out.push_str(&format!(
+                    r#"<rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr} fill="{}" fill-opacity="{}"/>"#,
+                    n.w, n.h, xml_escape(&p.color), p.opacity
+                ));
+            }
+            for p in &n.strokes {
+                out.push_str(&format!(
+                    r#"<rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr} fill="none" stroke="{}" stroke-opacity="{}" stroke-width="{}"/>"#,
+                    n.w, n.h, xml_escape(&p.color), p.opacity, n.stroke_weight
+                ));
+            }
+            for c in &n.children {
+                svg_node(c, ox, oy, out);
+            }
+        }
+        NodeKind::Ellipse => {
+            let (cx, cy, rx, ry) = (x + n.w / 2.0, y + n.h / 2.0, n.w / 2.0, n.h / 2.0);
+            for p in &n.fills {
+                out.push_str(&format!(
+                    r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{}" fill-opacity="{}"/>"#,
+                    xml_escape(&p.color), p.opacity
+                ));
+            }
+            for p in &n.strokes {
+                out.push_str(&format!(
+                    r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="none" stroke="{}" stroke-opacity="{}" stroke-width="{}"/>"#,
+                    xml_escape(&p.color), p.opacity, n.stroke_weight
+                ));
+            }
+        }
+        NodeKind::Text => {
+            // Baseline approximation: top-aligned text sits one em below
+            // its vertical-centering offset.
+            let ty = y + (n.h - n.font_size).max(0.0) / 2.0 + n.font_size * 0.8;
+            for p in &n.fills {
+                out.push_str(&format!(
+                    r#"<text x="{x}" y="{ty}" font-family="Hanken Grotesk, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
+                    n.font_size, xml_escape(&p.color), p.opacity, xml_escape(&n.text)
+                ));
+            }
+        }
+    }
+    out.push_str("</g>");
 }

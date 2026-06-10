@@ -82,6 +82,9 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
       } else if (mod && e.key.toLowerCase() === "d") {
         e.preventDefault();
         engine.duplicate_selection();
+      } else if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        e.shiftKey ? engine.ungroup_selection() : engine.group_selection();
       } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         onSave();

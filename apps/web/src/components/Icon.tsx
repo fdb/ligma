@@ -14,6 +14,33 @@ const paths: Record<string, React.ReactNode> = {
   minus: <path d="M3.5 8h9" />,
   plus: <path d="M8 3.5v9M3.5 8h9" />,
   fit: <path d="M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3" />,
+  group: (
+    <>
+      <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
+      <path d="M6.5 11.5v1a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4z" />
+      <circle cx="8" cy="8" r="1.8" />
+    </>
+  ),
+  "eye-off": <path d="M3 3l10 10M5.2 5.6C3 6.9 1.8 8 1.8 8s2.2 4 6.2 4c1 0 1.9-.2 2.7-.6M7 4.1c.3 0 .7-.1 1-.1 4 0 6.2 4 6.2 4s-.6 1.1-1.8 2.2" />,
+  lock: (
+    <>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 4.9-.6" />
+    </>
+  ),
+  chevron: <path d="M6 4.5L10 8l-4 3.5" />,
+  download: <path d="M8 2.5V10M5 7.5L8 10.5l3-3M3 13h10" />,
 };
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {

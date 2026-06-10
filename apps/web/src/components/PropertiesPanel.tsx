@@ -1,20 +1,159 @@
 import type { Engine } from "../engine/pkg/ligma_core";
-import type { Scene, SceneNode } from "../types";
+import { findNode, type Paint, type Scene, type SceneNode } from "../types";
+import { exportNode } from "../lib/exporter";
+import { Icon } from "./Icon";
 import { NumberField } from "./NumberField";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  onAdd,
+  children,
+}: {
+  title: string;
+  onAdd?: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <div className="border-b border-zinc-100 px-4 py-3">
-      <div className="mb-2 text-[11px] font-semibold tracking-wide text-zinc-400 uppercase">
-        {title}
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[11px] font-semibold tracking-wide text-zinc-400 uppercase">
+          {title}
+        </span>
+        {onAdd && (
+          <button
+            title={`Add ${title.toLowerCase()}`}
+            onClick={onAdd}
+            className="flex size-5 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          >
+            <Icon name="plus" size={12} />
+          </button>
+        )}
       </div>
       {children}
     </div>
   );
 }
 
+function PaintRow({
+  engine,
+  nodeId,
+  kind,
+  index,
+  paint,
+}: {
+  engine: Engine;
+  nodeId: number;
+  kind: "fills" | "strokes";
+  index: number;
+  paint: Paint;
+}) {
+  const update = (color: string, opacity: number) =>
+    engine.update_paint(nodeId, kind, index, color, opacity);
+
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5 last:mb-0">
+      <input
+        type="color"
+        value={paint.color}
+        onChange={(e) => update(e.target.value, paint.opacity)}
+        className="size-7 shrink-0 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
+      />
+      <div className="flex h-7 min-w-0 flex-1 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
+        <input
+          key={paint.color}
+          defaultValue={paint.color.replace("#", "").toUpperCase()}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => {
+            const hex = e.currentTarget.value.replace("#", "");
+            if (/^[0-9a-fA-F]{6}$/.test(hex)) update(`#${hex.toLowerCase()}`, paint.opacity);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            e.stopPropagation();
+          }}
+          className="w-full bg-transparent font-mono text-[11.5px] text-zinc-800 outline-none"
+        />
+      </div>
+      <div className="flex h-7 w-14 shrink-0 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
+        <input
+          key={paint.opacity}
+          defaultValue={Math.round(paint.opacity * 100)}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => {
+            const v = parseFloat(e.currentTarget.value);
+            if (!Number.isNaN(v)) update(paint.color, Math.min(100, Math.max(0, v)) / 100);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            e.stopPropagation();
+          }}
+          className="w-full bg-transparent font-mono text-[11.5px] text-zinc-800 outline-none"
+        />
+        <span className="text-[11px] text-zinc-400">%</span>
+      </div>
+      <button
+        title="Remove"
+        onClick={() => engine.remove_paint(nodeId, kind, index)}
+        className="flex size-5 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+      >
+        <Icon name="minus" size={12} />
+      </button>
+    </div>
+  );
+}
+
+const SCALES = [0.5, 0.75, 1, 1.5, 2, 3, 4];
+
+function ExportSection({ engine, node }: { engine: Engine; node: SceneNode }) {
+  return (
+    <Section title="Export" onAdd={() => engine.add_export_preset(node.id)}>
+      {node.exportPresets.map((p, i) => (
+        <div key={i} className="mb-1.5 flex items-center gap-1.5">
+          <select
+            value={p.scale}
+            onChange={(e) => engine.set_export_preset(node.id, i, parseFloat(e.target.value), p.format)}
+            className="h-7 flex-1 rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+          >
+            {SCALES.map((s) => (
+              <option key={s} value={s}>
+                {s}x
+              </option>
+            ))}
+          </select>
+          <select
+            value={p.format}
+            onChange={(e) => engine.set_export_preset(node.id, i, p.scale, e.target.value)}
+            className="h-7 flex-1 rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 uppercase outline-none focus:ring-1 focus:ring-sky-400"
+          >
+            <option value="png">PNG</option>
+            <option value="svg">SVG</option>
+          </select>
+          <button
+            title="Remove preset"
+            onClick={() => engine.remove_export_preset(node.id, i)}
+            className="flex size-5 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          >
+            <Icon name="minus" size={12} />
+          </button>
+        </div>
+      ))}
+      {node.exportPresets.length > 0 && (
+        <button
+          onClick={() => node.exportPresets.forEach((p) => exportNode(engine, node, p))}
+          className="mt-1 flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-zinc-200 text-[12px] font-medium text-zinc-700 transition-colors hover:border-sky-300 hover:text-sky-700"
+        >
+          <Icon name="download" size={12} />
+          Export {node.name}
+        </button>
+      )}
+    </Section>
+  );
+}
+
 export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scene }) {
-  const selected: SceneNode[] = scene.nodes.filter((n) => scene.selection.includes(n.id));
+  const selected = scene.selection
+    .map((id) => findNode(scene.nodes, id))
+    .filter((n): n is SceneNode => n !== null);
 
   if (selected.length === 0) {
     return (
@@ -33,6 +172,7 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
       <aside className="w-60 shrink-0 border-l border-zinc-200 bg-white">
         <Section title="Design">
           <p className="text-[12px] text-zinc-500">{selected.length} layers selected</p>
+          <p className="mt-1 text-[11px] text-zinc-400">⌘G to group them</p>
         </Section>
       </aside>
     );
@@ -40,6 +180,7 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
 
   const n = selected[0];
   const common = { engine, nodeId: n.id };
+  const isGroup = n.kind === "group";
 
   return (
     <aside className="w-60 shrink-0 overflow-y-auto border-l border-zinc-200 bg-white">
@@ -47,8 +188,12 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="X" value={n.x} field="x" {...common} />
           <NumberField label="Y" value={n.y} field="y" {...common} />
-          <NumberField label="W" value={n.w} field="w" min={1} {...common} />
-          <NumberField label="H" value={n.h} field="h" min={1} {...common} />
+          {!isGroup && (
+            <>
+              <NumberField label="W" value={n.w} field="w" min={1} {...common} />
+              <NumberField label="H" value={n.h} field="h" min={1} {...common} />
+            </>
+          )}
         </div>
       </Section>
 
@@ -76,32 +221,38 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
         </div>
       </Section>
 
-      <Section title="Fill">
-        <div className="flex items-center gap-2">
-          <input
-            type="color"
-            value={n.fill}
-            onChange={(e) => engine.set_fill(n.id, e.target.value)}
-            className="size-7 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
-          />
-          <div className="flex h-7 flex-1 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
-            <input
-              key={n.fill}
-              defaultValue={n.fill.replace("#", "").toUpperCase()}
-              onFocus={(e) => e.currentTarget.select()}
-              onBlur={(e) => {
-                const hex = e.currentTarget.value.replace("#", "");
-                if (/^[0-9a-fA-F]{6}$/.test(hex)) engine.set_fill(n.id, `#${hex.toLowerCase()}`);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                e.stopPropagation();
-              }}
-              className="w-full bg-transparent font-mono text-[11.5px] text-zinc-800 outline-none"
-            />
-          </div>
-        </div>
-      </Section>
+      {!isGroup && (
+        <>
+          <Section title="Fill" onAdd={() => engine.add_paint(n.id, "fills")}>
+            {n.fills.length === 0 && (
+              <p className="text-[11px] text-zinc-400">No fills. Click + to add one.</p>
+            )}
+            {n.fills.map((p, i) => (
+              <PaintRow key={i} engine={engine} nodeId={n.id} kind="fills" index={i} paint={p} />
+            ))}
+          </Section>
+
+          <Section title="Stroke" onAdd={() => engine.add_paint(n.id, "strokes")}>
+            {n.strokes.length === 0 && (
+              <p className="text-[11px] text-zinc-400">No strokes. Click + to add one.</p>
+            )}
+            {n.strokes.map((p, i) => (
+              <PaintRow key={i} engine={engine} nodeId={n.id} kind="strokes" index={i} paint={p} />
+            ))}
+            {n.strokes.length > 0 && (
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                <NumberField
+                  label="W"
+                  value={n.strokeWeight}
+                  min={0}
+                  field="strokeWeight"
+                  {...common}
+                />
+              </div>
+            )}
+          </Section>
+        </>
+      )}
 
       {n.kind === "text" && (
         <Section title="Text">
@@ -118,6 +269,8 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
           </div>
         </Section>
       )}
+
+      <ExportSection engine={engine} node={n} />
     </aside>
   );
 }
