@@ -78,16 +78,24 @@ cd apps/worker && npm run db:remote && npm run deploy
 | Right-click | Context menu (clipboard, z-order, group, lock, hide…) |
 | Double-click | Edit text in place · rename a frame via its label |
 | `⇧1` / `⌘0` / `⌘±` | Zoom to fit / 100% / in & out |
+| `C` | Comment mode — click the canvas to pin a comment |
 | `⌘S` | Save now (documents also autosave after edits) |
 
 Drawing inside a frame parents the shape to that frame; selecting multiple
 shapes (or a group) shows resize handles on the joint bounding box.
 
+## Collaboration
+
+Documents are multiplayer-aware: everyone in a file sees each other's
+named cursors live, saves propagate to other editors automatically,
+comments pin to canvas positions (press `C`, click, type), and a
+floating session chat relays through the same presence room.
+
 ## Roadmap (Figma 1.0 scope)
 
 - Frame clipping (children clip to their frame)
-- Gradients and images
-- Vector pen tool and boolean operations
+- Gradients
+- Vector pen tool and boolean operations (flatten, union, subtract, …)
+- Rich text: styling spans inside a text node
 - Components and instances
-- Multiplayer co-editing (per-op sync; presence cursors already work)
-- Layer drag-reordering
+- Multiplayer co-editing (per-operation sync; presence/saves already live)
