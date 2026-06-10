@@ -154,6 +154,18 @@ fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
     }
 }
 
+/// Maps a subtree from the old selection bbox (bx,by × fx,fy scale) into a
+/// new one anchored at (nx,ny).
+fn scale_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx: f64, fy: f64) {
+    n.x = nx + (n.x - bx) * fx;
+    n.y = ny + (n.y - by) * fy;
+    n.w *= fx;
+    n.h *= fy;
+    for c in &mut n.children {
+        scale_subtree(c, bx, by, nx, ny, fx, fy);
+    }
+}
+
 fn round_subtree(n: &mut Node) {
     n.x = n.x.round();
     n.y = n.y.round();
@@ -269,12 +281,14 @@ enum Drag {
         alt_copied: bool,
     },
     Resize {
-        id: u32,
+        /// Clones of the selected nodes at drag start; live values are
+        /// recomputed from these so repeated scaling never accumulates error.
+        starts: Vec<Node>,
+        bx: f64,
+        by: f64,
+        bw: f64,
+        bh: f64,
         handle: usize,
-        sx: f64,
-        sy: f64,
-        sw: f64,
-        sh: f64,
         ox: f64,
         oy: f64,
     },
@@ -395,6 +409,7 @@ pub struct Engine {
     pending_undo: Option<Vec<Node>>,
     undo: Vec<Vec<Node>>,
     redo: Vec<Vec<Node>>,
+    clipboard: Vec<Node>,
     generation: u32,
     doc_generation: u32,
 }
@@ -419,6 +434,7 @@ impl Engine {
             pending_undo: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            clipboard: Vec::new(),
             generation: 0,
             doc_generation: 0,
         }
@@ -508,17 +524,18 @@ impl Engine {
                 // Resize handles take priority, then frame labels, then
                 // nodes, then marquee.
                 if let Some(handle) = self.handle_at(sx, sy) {
-                    let id = self.selection[0];
-                    let n = find_node(&self.nodes, id).unwrap();
-                    let (nx, ny, nw, nh) = (n.x, n.y, n.w, n.h);
+                    let ids = self.selection.clone();
+                    let (bx, by, bx2, by2) = self.selection_bbox(&ids).unwrap();
+                    let starts: Vec<Node> =
+                        ids.iter().filter_map(|&id| find_node(&self.nodes, id).cloned()).collect();
                     self.begin_mutation();
                     self.drag = Drag::Resize {
-                        id,
+                        starts,
+                        bx,
+                        by,
+                        bw: bx2 - bx,
+                        bh: by2 - by,
                         handle,
-                        sx: nx,
-                        sy: ny,
-                        sw: nw,
-                        sh: nh,
                         ox: x,
                         oy: y,
                     };
@@ -620,20 +637,20 @@ impl Engine {
                 recompute_group_bounds(&mut self.nodes);
                 self.apply_snapping(&ids);
             }
-            Drag::Resize { id, handle, sx: rx, sy: ry, sw, sh, ox, oy } => {
+            Drag::Resize { starts, bx, by, bw, bh, handle, ox, oy } => {
                 let (dx, dy) = (x - *ox, y - *oy);
                 let (hx, hy) = HANDLES[*handle];
                 // A corner drag moves the edge(s) it sits on; the opposite
                 // corner stays anchored.
                 let (mut nx, mut nw) = if hx == 0.0 {
-                    (*rx + dx, *sw - dx)
+                    (*bx + dx, *bw - dx)
                 } else {
-                    (*rx, *sw + dx)
+                    (*bx, *bw + dx)
                 };
                 let (mut ny, mut nh) = if hy == 0.0 {
-                    (*ry + dy, *sh - dy)
+                    (*by + dy, *bh - dy)
                 } else {
-                    (*ry, *sh + dy)
+                    (*by, *bh + dy)
                 };
                 if nw < 0.0 {
                     nx += nw;
@@ -643,12 +660,21 @@ impl Engine {
                     ny += nh;
                     nh = -nh;
                 }
-                let id = *id;
-                if let Some(n) = find_node_mut(&mut self.nodes, id) {
-                    n.x = nx;
-                    n.y = ny;
-                    n.w = nw;
-                    n.h = nh;
+                let fx = if *bw > 0.0 { nw / *bw } else { 1.0 };
+                let fy = if *bh > 0.0 { nh / *bh } else { 1.0 };
+                let (obx, oby) = (*bx, *by);
+                let scaled: Vec<Node> = starts
+                    .iter()
+                    .map(|s| {
+                        let mut c = s.clone();
+                        scale_subtree(&mut c, obx, oby, nx, ny, fx, fy);
+                        c
+                    })
+                    .collect();
+                for c in scaled {
+                    if let Some(slot) = find_node_mut(&mut self.nodes, c.id) {
+                        *slot = c;
+                    }
                 }
                 recompute_group_bounds(&mut self.nodes);
             }
@@ -684,6 +710,33 @@ impl Engine {
                     }
                     round_subtree(n);
                 }
+                // Drawing inside a frame parents the new shape to it
+                // (children keep absolute coordinates, so no translation).
+                let center = find_node(&self.nodes, id)
+                    .filter(|n| n.kind != NodeKind::Frame)
+                    .map(|n| (n.x + n.w / 2.0, n.y + n.h / 2.0));
+                if let Some((cx, cy)) = center {
+                    let target = self
+                        .nodes
+                        .iter()
+                        .rev()
+                        .find(|f| {
+                            f.kind == NodeKind::Frame
+                                && f.id != id
+                                && f.visible
+                                && !f.locked
+                                && f.contains(cx, cy)
+                        })
+                        .map(|f| f.id);
+                    if let Some(fid) = target {
+                        if let Some(pos) = self.nodes.iter().position(|n| n.id == id) {
+                            let node = self.nodes.remove(pos);
+                            if let Some(f) = find_node_mut(&mut self.nodes, fid) {
+                                f.children.push(node);
+                            }
+                        }
+                    }
+                }
                 self.commit_mutation();
                 self.tool = Tool::Select;
             }
@@ -706,9 +759,11 @@ impl Engine {
                     self.pending_undo = None;
                 }
             }
-            Drag::Resize { id, .. } => {
-                if let Some(n) = find_node_mut(&mut self.nodes, id) {
-                    round_subtree(n);
+            Drag::Resize { starts, .. } => {
+                for s in starts {
+                    if let Some(n) = find_node_mut(&mut self.nodes, s.id) {
+                        round_subtree(n);
+                    }
                 }
                 recompute_group_bounds(&mut self.nodes);
                 self.commit_mutation();
@@ -1152,6 +1207,84 @@ impl Engine {
         self.touch();
     }
 
+    // ----- clipboard & z-order -----
+
+    /// Copies the selection into the engine's internal clipboard.
+    pub fn copy_selection(&mut self) {
+        let copies: Vec<Node> =
+            self.selection.iter().filter_map(|&id| find_node(&self.nodes, id).cloned()).collect();
+        if !copies.is_empty() {
+            self.clipboard = copies;
+        }
+    }
+
+    pub fn cut_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        self.copy_selection();
+        self.delete_selection();
+    }
+
+    /// Pastes clipboard contents at a cascading offset, selecting the copies.
+    pub fn paste_clipboard(&mut self) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        self.snapshot_now();
+        // Shift the clipboard itself so repeated pastes cascade.
+        for n in &mut self.clipboard {
+            shift_subtree(n, 16.0, 16.0);
+        }
+        let mut new_ids = Vec::new();
+        for n in self.clipboard.clone() {
+            let mut copy = n;
+            assign_fresh_ids(&mut copy, &mut self.next_id);
+            new_ids.push(copy.id);
+            self.nodes.push(copy);
+        }
+        self.selection = new_ids;
+        self.touch();
+    }
+
+    pub fn clipboard_len(&self) -> usize {
+        self.clipboard.len()
+    }
+
+    pub fn bring_to_front(&mut self) {
+        self.reorder_selection(true);
+    }
+
+    pub fn send_to_back(&mut self) {
+        self.reorder_selection(false);
+    }
+
+    fn reorder_selection(&mut self, front: bool) {
+        if self.selection.is_empty() {
+            return;
+        }
+        self.snapshot_now();
+        for id in self.selection.clone() {
+            if let Some(path) = path_to(&self.nodes, id) {
+                let index = *path.last().unwrap();
+                let list = list_at(&mut self.nodes, &path);
+                let node = list.remove(index);
+                if front {
+                    list.push(node);
+                } else {
+                    list.insert(0, node);
+                }
+            }
+        }
+        self.touch();
+    }
+
+    /// Topmost node under a screen-space point (for context menus).
+    pub fn node_at(&self, sx: f64, sy: f64) -> Option<u32> {
+        let (x, y) = self.to_world(sx, sy);
+        self.hit_test(x, y)
+    }
+
     pub fn nudge(&mut self, dx: f64, dy: f64) {
         if self.selection.is_empty() {
             return;
@@ -1276,22 +1409,28 @@ impl Engine {
             }
         }
 
-        // Selection outlines + handles.
+        // Selection outlines, then resize handles on the joint bbox.
         for &id in &self.selection {
             if let Some(n) = find_node(&self.nodes, id) {
                 ctx.set_stroke_style_str("#0ea5e9");
                 ctx.set_line_width(1.5 / self.zoom);
                 ctx.stroke_rect(n.x, n.y, n.w, n.h);
-                if self.selection.len() == 1 && n.kind != NodeKind::Group {
-                    let hs = 7.0 / self.zoom;
-                    for (hx, hy) in HANDLES {
-                        let (px, py) = (n.x + hx * n.w - hs / 2.0, n.y + hy * n.h - hs / 2.0);
-                        ctx.set_fill_style_str("#ffffff");
-                        ctx.fill_rect(px, py, hs, hs);
-                        ctx.set_line_width(1.0 / self.zoom);
-                        ctx.stroke_rect(px, py, hs, hs);
-                    }
-                }
+            }
+        }
+        if let Some((bx, by, bx2, by2)) = self.selection_bbox(&self.selection) {
+            ctx.set_stroke_style_str("#0ea5e9");
+            if self.selection.len() > 1 {
+                ctx.set_line_width(1.0 / self.zoom);
+                ctx.stroke_rect(bx, by, bx2 - bx, by2 - by);
+            }
+            let hs = 7.0 / self.zoom;
+            for (hx, hy) in HANDLES {
+                let (px, py) =
+                    (bx + hx * (bx2 - bx) - hs / 2.0, by + hy * (by2 - by) - hs / 2.0);
+                ctx.set_fill_style_str("#ffffff");
+                ctx.fill_rect(px, py, hs, hs);
+                ctx.set_line_width(1.0 / self.zoom);
+                ctx.stroke_rect(px, py, hs, hs);
             }
         }
 
@@ -1353,29 +1492,37 @@ impl Engine {
         self.zoom = new_zoom;
     }
 
-    /// Topmost top-level node under a world-space point. Hidden and locked
+    /// Topmost node under a world-space point. Frame children are hit
+    /// before the frame body; groups act as one unit. Hidden and locked
     /// nodes are not clickable.
     fn hit_test(&self, x: f64, y: f64) -> Option<u32> {
-        self.nodes
-            .iter()
-            .rev()
-            .find(|n| n.visible && !n.locked && n.contains(x, y))
-            .map(|n| n.id)
+        for n in self.nodes.iter().rev() {
+            if !n.visible || n.locked || !n.contains(x, y) {
+                continue;
+            }
+            if n.kind == NodeKind::Frame {
+                if let Some(c) =
+                    n.children.iter().rev().find(|c| c.visible && !c.locked && c.contains(x, y))
+                {
+                    return Some(c.id);
+                }
+            }
+            return Some(n.id);
+        }
+        None
     }
 
-    /// Resize handle under a screen-space point (single non-group selection).
+    /// Resize handle under a screen-space point, on the selection's joint
+    /// bounding box (works for single nodes, groups, and multi-selections).
     fn handle_at(&self, sx: f64, sy: f64) -> Option<usize> {
-        if self.selection.len() != 1 {
+        if self.selection.is_empty() {
             return None;
         }
-        let n = find_node(&self.nodes, self.selection[0])?;
-        if n.kind == NodeKind::Group {
-            return None;
-        }
+        let (bx, by, bx2, by2) = self.selection_bbox(&self.selection)?;
         let grab = 6.0;
         HANDLES.iter().position(|(hx, hy)| {
-            let px = (n.x + hx * n.w) * self.zoom + self.pan_x;
-            let py = (n.y + hy * n.h) * self.zoom + self.pan_y;
+            let px = (bx + hx * (bx2 - bx)) * self.zoom + self.pan_x;
+            let py = (by + hy * (by2 - by)) * self.zoom + self.pan_y;
             (sx - px).abs() <= grab && (sy - py).abs() <= grab
         })
     }

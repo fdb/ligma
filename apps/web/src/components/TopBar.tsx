@@ -72,6 +72,24 @@ export function TopBar({
         { label: "Redo", shortcut: "⇧⌘Z", action: () => engine.redo() },
         "---",
         {
+          label: "Copy",
+          shortcut: "⌘C",
+          disabled: scene.selection.length === 0,
+          action: () => engine.copy_selection(),
+        },
+        {
+          label: "Cut",
+          shortcut: "⌘X",
+          disabled: scene.selection.length === 0,
+          action: () => engine.cut_selection(),
+        },
+        {
+          label: "Paste",
+          shortcut: "⌘V",
+          disabled: engine.clipboard_len() === 0,
+          action: () => engine.paste_clipboard(),
+        },
+        {
           label: "Duplicate",
           shortcut: "⌘D",
           disabled: scene.selection.length === 0,
@@ -114,6 +132,19 @@ export function TopBar({
     {
       title: "Object",
       items: [
+        {
+          label: "Bring to front",
+          shortcut: "⌘]",
+          disabled: scene.selection.length === 0,
+          action: () => engine.bring_to_front(),
+        },
+        {
+          label: "Send to back",
+          shortcut: "⌘[",
+          disabled: scene.selection.length === 0,
+          action: () => engine.send_to_back(),
+        },
+        "---",
         {
           label: "Group selection",
           shortcut: "⌘G",

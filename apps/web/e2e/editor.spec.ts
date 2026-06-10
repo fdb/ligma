@@ -56,6 +56,18 @@ async function hoverSweep(page: Page, x1: number, y1: number, x2: number, y2: nu
   await page.mouse.move(box.x + x2, box.y + y2, { steps: 25 });
 }
 
+/** Click a layer row's expand chevron, waiting for it to appear (the
+ * chevron only renders once the rAF scene sync delivers the children). */
+async function expandLayer(page: Page, name: string) {
+  await layers(page)
+    .locator("[data-layer]", { hasText: name })
+    .getByTitle("Expand")
+    .click();
+}
+
+const sceneOf = (page: Page) =>
+  page.evaluate(() => JSON.parse((window as any).__engine.scene()));
+
 test("homepage creates a document and lists it afterwards", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /New design file/ }).click();
@@ -406,8 +418,10 @@ test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");
   await drag(page, 200, 150, 500, 350);
+  // Text placed inside the frame becomes its child; expand to see it.
   await page.keyboard.press("t");
   await clickCanvas(page, 300, 250);
+  await expandLayer(page, "Frame 1");
   await expect(layers(page).getByText("Text 1")).toBeVisible();
 
   await page.getByRole("button", { name: "Save" }).click();
@@ -415,6 +429,7 @@ test("documents persist through the worker across reload", async ({ page }) => {
 
   await page.goto(`/d/${id}`);
   await expect(layers(page).getByText("Frame 1")).toBeVisible();
+  await expandLayer(page, "Frame 1");
   await expect(layers(page).getByText("Text 1")).toBeVisible();
 });
 
@@ -438,4 +453,144 @@ test("marquee select, zoom, and pan survive a workout", async ({ page }) => {
   await page.mouse.wheel(0, 300);
   await page.keyboard.up("Control");
   await expect(page.locator("canvas")).toBeVisible();
+});
+
+test("⌘+ and ⌘− zoom the canvas", async ({ page }) => {
+  await openNewDocument(page);
+  const zoom = async () => (await sceneOf(page)).zoom as number;
+  const before = await zoom();
+  await page.keyboard.press("Meta+Equal");
+  expect(await zoom()).toBeGreaterThan(before);
+  await page.keyboard.press("Meta+Minus");
+  await page.keyboard.press("Meta+Minus");
+  expect(await zoom()).toBeLessThan(before);
+});
+
+test("inline text edit opens with no visual glyph shift", async ({ page }) => {
+  await openNewDocument(page);
+  await page.evaluate(() => (document as any).fonts.ready);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250); // places the default text node
+  await clickCanvas(page, 700, 450); // deselect: no selection chrome near the glyphs
+
+  const box = await canvasBox(page);
+  const s = await sceneOf(page);
+  const n = s.nodes[0];
+  const rect = {
+    x: n.x * s.zoom + s.panX,
+    y: n.y * s.zoom + s.panY,
+    w: n.w * s.zoom,
+    h: n.h * s.zoom,
+  };
+  const clip = {
+    x: box.x + rect.x - 8,
+    y: box.y + rect.y - 12,
+    width: rect.w + 16,
+    height: rect.h + 24,
+  };
+
+  // Locate the dark glyph pixels inside a region screenshot, decoded in
+  // the browser (no Node-side PNG dependency).
+  const glyphPos = async () => {
+    const shot = await page.screenshot({ clip });
+    return page.evaluate(async (b64: string) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const c = document.createElement("canvas");
+      c.width = bmp.width;
+      c.height = bmp.height;
+      const ctx = c.getContext("2d")!;
+      ctx.drawImage(bmp, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      let top = Infinity;
+      let left = Infinity;
+      for (let y = 0; y < c.height; y++) {
+        for (let x = 0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          if (lum < 100) {
+            if (y < top) top = y;
+            if (x < left) left = x;
+          }
+        }
+      }
+      return { top, left };
+    }, shot.toString("base64"));
+  };
+
+  const before = await glyphPos();
+  expect(before.top).not.toBe(Infinity); // sanity: glyphs found on canvas
+
+  await page.mouse.dblclick(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
+  await expect(page.getByTestId("text-editor")).toBeVisible();
+  const during = await glyphPos();
+
+  expect(Math.abs(during.top - before.top)).toBeLessThanOrEqual(2);
+  expect(Math.abs(during.left - before.left)).toBeLessThanOrEqual(2);
+});
+
+test("drawing inside a frame nests the shape under it in the outliner", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 600, 400);
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 300);
+
+  const s = await sceneOf(page);
+  expect(s.nodes.length).toBe(1);
+  expect(s.nodes[0].children.map((c: any) => c.kind)).toEqual(["rect"]);
+
+  await expandLayer(page, "Frame 1");
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+
+  // The nested child stays directly selectable on the canvas.
+  await clickCanvas(page, 300, 250);
+  const sel = (await sceneOf(page)).selection;
+  expect(sel).toEqual([s.nodes[0].children[0].id]);
+});
+
+test("right-click context menu: z-order, copy and paste", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 300, 300);
+  await page.keyboard.press("r");
+  await drag(page, 250, 250, 350, 350);
+  const order = async () => (await sceneOf(page)).nodes.map((n: any) => n.name);
+  expect(await order()).toEqual(["Rectangle 1", "Rectangle 2"]);
+
+  const box = await canvasBox(page);
+  const menu = page.getByTestId("context-menu");
+  await page.mouse.click(box.x + 210, box.y + 210, { button: "right" });
+  await expect(menu).toBeVisible();
+  await menu.getByText("Bring to front").click();
+  expect(await order()).toEqual(["Rectangle 2", "Rectangle 1"]);
+
+  await page.mouse.click(box.x + 210, box.y + 210, { button: "right" });
+  await menu.getByText("Copy", { exact: true }).click();
+  await page.mouse.click(box.x + 550, box.y + 200, { button: "right" });
+  await menu.getByText("Paste").click();
+  await expect.poll(async () => (await sceneOf(page)).nodes.length).toBe(3);
+});
+
+test("multi-selection resizes through the joint bbox handles", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 250, 250);
+  await page.keyboard.press("r");
+  await drag(page, 300, 300, 350, 350);
+
+  await clickCanvas(page, 225, 225);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 325, 325);
+  await page.keyboard.up("Shift");
+  expect((await sceneOf(page)).selection.length).toBe(2);
+
+  // Drag the bottom-right bbox handle: 150×150 bbox doubles to 300×300.
+  // Assertions are relative (pan-independent): both 50×50 rects double,
+  // and the 100px gap between their origins doubles too.
+  await drag(page, 350, 350, 500, 500);
+  const nodes = (await sceneOf(page)).nodes;
+  expect(nodes[0].w).toBe(100);
+  expect(nodes[1].w).toBe(100);
+  expect(nodes[1].x - nodes[0].x).toBe(200);
 });

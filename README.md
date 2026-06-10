@@ -69,11 +69,17 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `Space`-drag | Pan · scroll pans · `⌘`+scroll / pinch zooms |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 | `⌘G` / `⇧⌘G` | Group / ungroup |
+| `⌘C` `⌘X` `⌘V` | Copy, cut, paste (engine clipboard; pastes cascade) |
+| `⌘]` / `⌘[` | Bring to front / send to back |
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |
 | `⌥`-drag | Drag a copy (original stays put) |
+| Right-click | Context menu (clipboard, z-order, group, lock, hide…) |
 | Double-click | Edit text in place · rename a frame via its label |
-| `⇧1` / `⌘0` | Zoom to fit / 100% |
+| `⇧1` / `⌘0` / `⌘±` | Zoom to fit / 100% / in & out |
 | `⌘S` | Save now (documents also autosave after edits) |
+
+Drawing inside a frame parents the shape to that frame; selecting multiple
+shapes (or a group) shows resize handles on the joint bounding box.
 
 ## Roadmap (Figma 1.0 scope)
 

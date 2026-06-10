@@ -47,6 +47,7 @@ function LayerRow({
       >
         {isGroup ? (
           <button
+            title={open ? "Collapse" : "Expand"}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onToggleExpand(node.id)}
             className={`flex size-4 shrink-0 items-center justify-center text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}

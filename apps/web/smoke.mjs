@@ -205,6 +205,91 @@ assert(e6.doc_generation() === dg, "hover/select/zoom leave doc_generation untou
 e6.set_field(rid, "x", 99);
 assert(e6.doc_generation() > dg, "mutations bump doc_generation");
 
+// Frame parenting: drawing inside a frame nests the shape under it.
+const e7 = new Engine();
+e7.set_tool("frame");
+e7.pointer_down(0, 0, false, false);
+e7.pointer_move(400, 300);
+e7.pointer_up();
+e7.set_tool("rect");
+e7.pointer_down(50, 50, false, false);
+e7.pointer_move(150, 150, false, false);
+e7.pointer_up();
+let s7 = JSON.parse(e7.scene());
+assert(s7.nodes.length === 1 && s7.nodes[0].kind === "frame", "shape drawn in a frame leaves top level");
+assert(s7.nodes[0].children.length === 1 && s7.nodes[0].children[0].kind === "rect", "frame adopts the new shape");
+const childId = s7.nodes[0].children[0].id;
+assert(e7.node_at(100, 100) === childId, "hit test descends into frame children");
+assert(e7.node_at(300, 250) === s7.nodes[0].id, "frame body is hit where no child sits");
+e7.set_tool("rect");
+e7.pointer_down(600, 600, false, false);
+e7.pointer_move(700, 700, false, false);
+e7.pointer_up();
+assert(JSON.parse(e7.scene()).nodes.length === 2, "shape drawn outside frames stays top level");
+
+// Clipboard: copy / paste (cascading) / cut.
+const e8 = new Engine();
+e8.set_tool("rect");
+e8.pointer_down(0, 0, false, false);
+e8.pointer_move(50, 50);
+e8.pointer_up();
+assert(e8.clipboard_len() === 0, "clipboard starts empty");
+e8.copy_selection();
+assert(e8.clipboard_len() === 1, "copy fills the clipboard");
+e8.paste_clipboard();
+let s8 = JSON.parse(e8.scene());
+assert(s8.nodes.length === 2 && s8.nodes[1].x === 16, "paste inserts an offset copy");
+assert(s8.selection.length === 1 && s8.selection[0] === s8.nodes[1].id, "paste selects the copy");
+e8.paste_clipboard();
+assert(JSON.parse(e8.scene()).nodes[2].x === 32, "repeated pastes cascade");
+e8.cut_selection();
+assert(JSON.parse(e8.scene()).nodes.length === 2, "cut removes the selection");
+e8.paste_clipboard();
+assert(JSON.parse(e8.scene()).nodes.length === 3, "cut contents can be pasted back");
+
+// Z-order: bring to front / send to back.
+const e9 = new Engine();
+const draw9 = (x) => {
+  e9.set_tool("rect");
+  e9.pointer_down(x, 0, false, false);
+  e9.pointer_move(x + 40, 40);
+  e9.pointer_up();
+};
+draw9(0);
+draw9(100);
+draw9(200);
+const first9 = JSON.parse(e9.scene()).nodes[0].id;
+e9.select(first9, false);
+e9.bring_to_front();
+assert(JSON.parse(e9.scene()).nodes.at(-1).id === first9, "bring_to_front moves node to the end");
+e9.send_to_back();
+assert(JSON.parse(e9.scene()).nodes[0].id === first9, "send_to_back moves node to the start");
+e9.undo();
+assert(JSON.parse(e9.scene()).nodes.at(-1).id === first9, "z-order change is one undo step");
+
+// Multi-selection resize: dragging a bbox handle scales every selected node.
+const e10 = new Engine();
+const draw10 = (x, y) => {
+  e10.set_tool("rect");
+  e10.pointer_down(x, y, false, false);
+  e10.pointer_move(x + 100, y + 100);
+  e10.pointer_up();
+};
+draw10(0, 0);
+draw10(200, 200);
+const ids10 = JSON.parse(e10.scene()).nodes.map((n) => n.id);
+e10.select(ids10[0], false);
+e10.select(ids10[1], true);
+e10.pointer_down(300, 300, false, false); // bottom-right bbox handle
+e10.pointer_move(600, 600);
+e10.pointer_up();
+let s10 = JSON.parse(e10.scene());
+assert(s10.nodes[0].w === 200 && s10.nodes[1].w === 200, "bbox resize scales both widths");
+assert(s10.nodes[1].x === 400 && s10.nodes[1].y === 400, "bbox resize scales positions");
+e10.undo();
+s10 = JSON.parse(e10.scene());
+assert(s10.nodes[0].w === 100 && s10.nodes[1].x === 200, "multi-resize is one undo step");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

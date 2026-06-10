@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
+import { fontMetrics } from "../lib/fontMetrics";
 import { findNode, type Scene, type SceneNode, type Tool } from "../types";
+import { ContextMenu } from "./ContextMenu";
+import type { MenuItem } from "./MenuBar";
 
 interface Props {
   engine: Engine;
@@ -23,6 +26,7 @@ type Overlay = { id: number; kind: "text" | "name" } | null;
 export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
 
@@ -96,6 +100,29 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
       } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         onSave();
+      } else if (mod && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        engine.copy_selection();
+      } else if (mod && e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        engine.cut_selection();
+      } else if (mod && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        engine.paste_clipboard();
+      } else if (mod && e.key === "]") {
+        e.preventDefault();
+        engine.bring_to_front();
+      } else if (mod && e.key === "[") {
+        e.preventDefault();
+        engine.send_to_back();
+      } else if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        const wrap = wrapRef.current!;
+        engine.set_zoom(engine.zoom() * 1.25, wrap.clientWidth / 2, wrap.clientHeight / 2);
+      } else if (mod && e.key === "-") {
+        e.preventDefault();
+        const wrap = wrapRef.current!;
+        engine.set_zoom(engine.zoom() / 1.25, wrap.clientWidth / 2, wrap.clientHeight / 2);
       } else if (mod && e.key === "0") {
         e.preventDefault();
         const wrap = wrapRef.current!;
@@ -161,19 +188,87 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
       setOverlay({ id: labelId, kind: "name" });
       return;
     }
-    // Topmost visible, unlocked top-level node under the cursor.
-    const wx = (x - live.panX) / live.zoom;
-    const wy = (y - live.panY) / live.zoom;
-    const hit = [...live.nodes]
-      .reverse()
-      .find(
-        (n) =>
-          n.visible && !n.locked && wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h,
-      );
+    // Engine hit test (descends into frame children, skips hidden/locked).
+    const hitId = engine.node_at(x, y);
+    const hit = hitId !== undefined ? findNode(live.nodes, hitId) : null;
     if (hit?.kind === "text") {
       engine.set_editing_node(hit.id);
       setOverlay({ id: hit.id, kind: "text" });
     }
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const { x, y } = pos(e);
+    const hit = engine.node_at(x, y);
+    const live: Scene = JSON.parse(engine.scene());
+    if (hit !== undefined && !live.selection.includes(hit)) {
+      engine.select(hit, false);
+    } else if (hit === undefined) {
+      engine.clear_selection();
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const ctxItems = (): (MenuItem | "---")[] => {
+    const sel = scene.selection;
+    const some = sel.length > 0;
+    const first = some ? findNode(scene.nodes, sel[0]) : null;
+    return [
+      { label: "Copy", shortcut: "⌘C", disabled: !some, action: () => engine.copy_selection() },
+      { label: "Cut", shortcut: "⌘X", disabled: !some, action: () => engine.cut_selection() },
+      {
+        label: "Paste",
+        shortcut: "⌘V",
+        disabled: engine.clipboard_len() === 0,
+        action: () => engine.paste_clipboard(),
+      },
+      {
+        label: "Duplicate",
+        shortcut: "⌘D",
+        disabled: !some,
+        action: () => engine.duplicate_selection(),
+      },
+      "---",
+      {
+        label: "Bring to front",
+        shortcut: "⌘]",
+        disabled: !some,
+        action: () => engine.bring_to_front(),
+      },
+      {
+        label: "Send to back",
+        shortcut: "⌘[",
+        disabled: !some,
+        action: () => engine.send_to_back(),
+      },
+      "---",
+      {
+        label: "Group selection",
+        shortcut: "⌘G",
+        disabled: sel.length < 2,
+        action: () => engine.group_selection(),
+      },
+      {
+        label: "Ungroup",
+        shortcut: "⇧⌘G",
+        disabled: !some,
+        action: () => engine.ungroup_selection(),
+      },
+      "---",
+      {
+        label: first?.visible === false ? "Show" : "Hide",
+        disabled: !some,
+        action: () => sel.forEach((id) => engine.set_visible(id, first?.visible === false)),
+      },
+      {
+        label: first?.locked ? "Unlock" : "Lock",
+        disabled: !some,
+        action: () => sel.forEach((id) => engine.set_locked(id, !first?.locked)),
+      },
+      "---",
+      { label: "Delete", shortcut: "⌫", disabled: !some, action: () => engine.delete_selection() },
+    ];
   };
 
   const overlayNode: SceneNode | null = overlay ? findNode(scene.nodes, overlay.id) : null;
@@ -196,35 +291,58 @@ export function CanvasView({ engine, scene, onSave, wrapRef }: Props) {
         }}
         onPointerUp={() => engine.pointer_up()}
         onDoubleClick={onDoubleClick}
+        onContextMenu={onContextMenu}
       />
-      {overlay && overlayNode && overlay.kind === "text" && (
-        <input
-          autoFocus
-          data-testid="text-editor"
-          defaultValue={overlayNode.text}
-          onFocus={(e) => e.currentTarget.select()}
-          onBlur={(e) => {
-            engine.set_text(overlayNode.id, e.currentTarget.value);
-            closeOverlay();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") closeOverlay();
-            e.stopPropagation();
-          }}
-          className="absolute bg-transparent outline-none"
-          style={{
-            left: overlayNode.x * scene.zoom + scene.panX,
-            top: overlayNode.y * scene.zoom + scene.panY,
-            width: Math.max(60, overlayNode.w * scene.zoom + 16),
-            height: overlayNode.h * scene.zoom,
-            fontSize: overlayNode.fontSize * scene.zoom,
-            lineHeight: `${overlayNode.h * scene.zoom}px`,
-            fontFamily: "'Hanken Grotesk', sans-serif",
-            color: overlayNode.fills[0]?.color ?? "#18181b",
-          }}
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={ctxItems()}
+          onClose={() => setCtxMenu(null)}
         />
       )}
+      {overlay &&
+        overlayNode &&
+        overlay.kind === "text" &&
+        (() => {
+          // Align the input's glyphs exactly with where the canvas drew
+          // them: match the CSS line-box baseline to the canvas baseline
+          // (textBaseline="top" at the vertically-centered em top).
+          const fs = overlayNode.fontSize * scene.zoom;
+          const m = fontMetrics(fs);
+          const boxH = m.fbAscent + m.fbDescent;
+          const emTop =
+            (overlayNode.y + Math.max(0, overlayNode.h - overlayNode.fontSize) / 2) * scene.zoom +
+            scene.panY;
+          return (
+            <input
+              autoFocus
+              data-testid="text-editor"
+              defaultValue={overlayNode.text}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={(e) => {
+                engine.set_text(overlayNode.id, e.currentTarget.value);
+                closeOverlay();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") closeOverlay();
+                e.stopPropagation();
+              }}
+              className="absolute bg-transparent p-0 outline-none"
+              style={{
+                left: overlayNode.x * scene.zoom + scene.panX,
+                top: emTop + m.emAscent - m.fbAscent,
+                width: Math.max(60, overlayNode.w * scene.zoom + 16),
+                height: boxH,
+                fontSize: fs,
+                lineHeight: `${boxH}px`,
+                fontFamily: "'Hanken Grotesk', sans-serif",
+                color: overlayNode.fills[0]?.color ?? "#18181b",
+              }}
+            />
+          );
+        })()}
       {overlay && overlayNode && overlay.kind === "name" && (
         <input
           autoFocus

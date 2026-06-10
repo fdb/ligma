@@ -1,15 +1,21 @@
 # TODO / FEATURE WISHLIST
 
 - Organizing things in the outliner by dragging items around (e.g. dragging items into other items)
-- Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
-- Text: making a text frame that does proper word wrapping
 - Text: select fonts and choose them from Google Fonts as well
-- If I draw an object in a frame, it should appear in the outliner as belonging to that frame
+- Text: set text alignment (both horizontal and vertical)
+- Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
+- Text: making a text frame that does proper word wrapping and also alignment and justification
 - Color picker that selects colors from pixels already on the canvas
-- Cmd-+ Cmd-- to zoom in / zoom out
-- Local files are not saved anywhere?
+- work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
+- more complex path operations like outline stroke, or even pathfinder operations like union/subtract,intersect,exclude (flatten + "frame selection" in the right-click menu wait on this)
 
 # DONE (things are moved here once they are done)
+
+- Text: text bug: text shifts around when clicking it to edit on the canvas
+- If I draw an object in a frame, it appears in the outliner as belonging to that frame (and stays selectable inside it)
+- Cmd-+ Cmd-- to zoom in / zoom out
+- If I have multiple shapes I can transform them together (resize handles on the joint bounding box; also resizes groups)
+- Right click menu: copy, cut, paste, duplicate, bring to front, send to back, group/ungroup, show/hide, lock/unlock, delete (+ ⌘C/⌘X/⌘V/⌘]/⌘[ shortcuts)
 
 - Option-dragging to copy shapes
 - Snapping to other shapes (edges + centers, red guide lines while dragging)
