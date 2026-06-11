@@ -481,6 +481,26 @@ export function CanvasView({
               onKeyDown={(e) => {
                 // Enter inserts a newline (Figma behavior); Escape commits.
                 if (e.key === "Escape") e.currentTarget.blur();
+                // ⌘B/⌘I style the selected character range. The overlay
+                // textarea stays plain; styling shows after commit.
+                if ((e.metaKey || e.ctrlKey) && ["b", "i"].includes(e.key.toLowerCase())) {
+                  e.preventDefault();
+                  const field = e.key.toLowerCase() === "b" ? "bold" : "italic";
+                  const ta = e.currentTarget;
+                  const [start, end] = [ta.selectionStart, ta.selectionEnd];
+                  if (start === end) return;
+                  // Commit the draft first so offsets address the same text.
+                  engine.set_text(overlayNode.id, ta.value);
+                  const live: Scene = JSON.parse(engine.scene());
+                  const node = findNode(live.nodes, overlayNode.id);
+                  const allOn = !!node?.spans.some(
+                    (s) =>
+                      s.start <= start &&
+                      s.start + s.len >= end &&
+                      (field === "bold" ? s.bold : s.italic),
+                  );
+                  engine.set_span_style(overlayNode.id, start, end - start, field, !allOn);
+                }
                 e.stopPropagation();
               }}
               className="absolute resize-none overflow-hidden bg-transparent p-0 outline-none"

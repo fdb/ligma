@@ -1176,3 +1176,55 @@ test("pathfinder: union and subtract from the context menu", async ({ page }) =>
   expect(s.nodes.length).toBe(1);
   await expect.poll(() => pixelAt(350, 350)).toEqual([212, 212, 216]);
 });
+
+test("rich text: ⌘B styles the selection; panel buttons style all", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 300);
+  await page.keyboard.press("Escape"); // commit the default "Text"
+
+  const darkPixels = () =>
+    page.evaluate(() => {
+      const canvas = document.querySelector("canvas")!;
+      const d = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] < 100) n++;
+      return n;
+    });
+  await expect.poll(darkPixels).toBeGreaterThan(0);
+  const before = await darkPixels();
+
+  // Edit, select "Tex" (3 chars), bold it via ⌘B, commit.
+  const box = await canvasBox(page);
+  await page.mouse.dblclick(box.x + 305, box.y + 300);
+  const editor = page.getByTestId("text-editor");
+  await editor.waitFor();
+  await editor.evaluate((ta: HTMLTextAreaElement) => ta.setSelectionRange(0, 3));
+  await page.keyboard.press("Meta+b");
+  await page.keyboard.press("Escape");
+
+  let s = await sceneOf(page);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 3, bold: true, italic: false }]);
+  // Bold glyphs carry more ink.
+  await expect.poll(darkPixels).toBeGreaterThan(before);
+
+  // The panel's B button styles the whole text; clicking again clears.
+  await page.getByTestId("text-bold").click();
+  s = await sceneOf(page);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 4, bold: true, italic: false }]);
+  await page.getByTestId("text-bold").click();
+  s = await sceneOf(page);
+  expect(s.nodes[0].spans).toEqual([]);
+
+  // Italic via the panel survives reload.
+  await page.getByTestId("text-italic").click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.reload();
+  await expect(layers(page).getByText("Text 1")).toBeVisible();
+  await expect
+    .poll(async () => (await sceneOf(page)).nodes[0].spans)
+    .toEqual([{ start: 0, len: 4, bold: false, italic: true }]);
+});

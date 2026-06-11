@@ -1,10 +1,13 @@
 # TODO / FEATURE WISHLIST
 
-- Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
+- Text spans: per-span font family, size and color (bold/italic spans shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
+- Double clicking an item in a group should select that item, allowing operations on that (e.g. resizing, editing text, and so on)
 
 # DONE (things are moved here once they are done)
+
+- Rich text, part 1 — bold/italic spans: select text while editing and press ⌘B/⌘I (or use the B/I buttons in the Text panel for the whole node); style runs merge and split cleanly, render with real font variants on canvas, export as SVG tspans, persist with the document, and clamp when the text changes
 
 - Outline stroke (right-click or Object menu): converts a shape's stroke into a filled even-odd ring path (mitered offsets of the closed outline, bevels at spikes); a filled body stays underneath, a stroke-only shape is replaced
 

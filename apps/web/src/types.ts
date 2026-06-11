@@ -51,6 +51,8 @@ export interface SceneNode {
   closed: boolean;
   /** Extra closed contours, filled with `points` under the even-odd rule. */
   inner: PathAnchor[][];
+  /** Styled runs in `text` (char offsets; text nodes only). */
+  spans: { start: number; len: number; bold: boolean; italic: boolean }[];
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }

@@ -405,6 +405,35 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
               field="fontSize"
               {...common}
             />
+            <div className="flex items-center gap-0.5">
+              {(["bold", "italic"] as const).map((f) => {
+                const whole =
+                  n.text.length > 0 &&
+                  n.spans.some(
+                    (s) =>
+                      s.start === 0 &&
+                      s.len >= n.text.length &&
+                      (f === "bold" ? s.bold : s.italic),
+                  );
+                return (
+                  <button
+                    key={f}
+                    data-testid={`text-${f}`}
+                    title={f === "bold" ? "Bold all (⌘B on a selection while editing)" : "Italic all (⌘I on a selection while editing)"}
+                    onClick={() => engine.set_span_style(n.id, 0, n.text.length, f, !whole)}
+                    className={`flex size-7 items-center justify-center rounded-md text-[12px] ${
+                      whole
+                        ? "bg-sky-50 text-sky-600"
+                        : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                    }`}
+                  >
+                    <span className={f === "bold" ? "font-bold" : "italic"}>
+                      {f === "bold" ? "B" : "I"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div className="mt-2 flex items-center justify-between">
             <div className="flex items-center gap-0.5">

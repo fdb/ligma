@@ -898,6 +898,41 @@ const so2 = JSON.parse(eo2.scene());
 assert(so2.nodes.length === 1 && so2.nodes[0].kind === "path", "stroke-only shape is replaced");
 assert(so2.nodes[0].inner.length === 1, "replacement is a ring");
 
+// Rich text spans: bold/italic runs merge, split, clamp, export.
+const es = new Engine();
+es.set_tool("text");
+es.pointer_down(0, 0, false, false);
+es.pointer_up();
+const tid = JSON.parse(es.scene()).nodes[0].id;
+es.set_text(tid, "hello world");
+es.set_span_style(tid, 0, 5, "bold", true);
+let sp = JSON.parse(es.scene()).nodes[0].spans;
+assert(sp.length === 1 && sp[0].start === 0 && sp[0].len === 5 && sp[0].bold, "bold span applies");
+es.set_span_style(tid, 3, 5, "italic", true);
+sp = JSON.parse(es.scene()).nodes[0].spans;
+assert(sp.length === 3, "overlapping italic splits into three runs");
+assert(sp[1].bold && sp[1].italic, "overlap run carries both styles");
+es.set_span_style(tid, 0, 11, "bold", true);
+es.set_span_style(tid, 0, 11, "italic", false);
+sp = JSON.parse(es.scene()).nodes[0].spans;
+assert(sp.length === 1 && sp[0].len === 11 && sp[0].bold && !sp[0].italic, "runs re-merge");
+es.set_span_style(tid, 0, 11, "bold", false);
+assert(JSON.parse(es.scene()).nodes[0].spans.length === 0, "unstyling clears spans");
+es.set_span_style(tid, 6, 5, "bold", true);
+es.undo();
+assert(JSON.parse(es.scene()).nodes[0].spans.length === 0, "span styling is undoable");
+es.redo();
+// set_text clamps spans to the new length.
+es.set_text(tid, "hello wo");
+sp = JSON.parse(es.scene()).nodes[0].spans;
+assert(sp.length === 1 && sp[0].start === 6 && sp[0].len === 2, "set_text clamps spans");
+// Round-trip + SVG tspan.
+const es2 = new Engine();
+es2.load_json(es.to_json());
+assert(JSON.parse(es2.scene()).nodes[0].spans.length === 1, "spans round-trip through JSON");
+const svgT = es.export_svg(tid);
+assert(svgT.includes('<tspan font-weight="700">wo</tspan>'), "SVG export emits bold tspans");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

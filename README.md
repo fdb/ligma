@@ -79,7 +79,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |
 | `⌥`-drag | Drag a copy (original stays put) |
 | Right-click | Context menu (clipboard, z-order, group, lock, hide…) |
-| Double-click | Edit text in place · rename a frame via its label |
+| Double-click | Edit text in place (`⌘B`/`⌘I` style the selection) · rename a frame via its label |
 | `⇧1` / `⌘0` / `⌘±` | Zoom to fit / 100% / in & out |
 | `C` | Comment mode — click the canvas to pin a comment |
 | `⌘S` | Save now (documents also autosave after edits) |

@@ -45,6 +45,19 @@ pub struct Anchor {
     pub hy_out: f64,
 }
 
+/// A styled run inside a text node, addressed by char offsets into
+/// `text`. Characters outside every span render with the base style.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Span {
+    pub start: usize,
+    pub len: usize,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+}
+
 /// A single fill or stroke: a color with its own opacity.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +171,9 @@ pub struct Node {
     /// with `points` under the even-odd rule, so overlaps become holes.
     #[serde(default)]
     pub inner: Vec<Vec<Anchor>>,
+    /// Styled runs in `text` (text nodes only).
+    #[serde(default)]
+    pub spans: Vec<Span>,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -436,6 +452,60 @@ fn path_hit(n: &Node, x: f64, y: f64, tol: f64) -> bool {
         }
     }
     !n.fills.is_empty() && inside
+}
+
+/// Re-encodes a per-char (bold, italic) map as minimal spans.
+fn run_length_spans(styles: &[(bool, bool)]) -> Vec<Span> {
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < styles.len() {
+        let (b, it) = styles[i];
+        let start = i;
+        while i < styles.len() && styles[i] == (b, it) {
+            i += 1;
+        }
+        if b || it {
+            spans.push(Span { start, len: i - start, bold: b, italic: it });
+        }
+    }
+    spans
+}
+
+/// The per-char style map for a text node (resolved from its spans).
+fn char_styles(n: &Node) -> Vec<(bool, bool)> {
+    let chars = n.text.chars().count();
+    let mut styles = vec![(false, false); chars];
+    for s in &n.spans {
+        for c in styles.iter_mut().skip(s.start).take(s.len) {
+            c.0 |= s.bold;
+            c.1 |= s.italic;
+        }
+    }
+    styles
+}
+
+/// Splits one wrapped line (starting at char `off` in the node's text)
+/// into maximal same-style segments.
+fn line_segments(styles: &[(bool, bool)], line: &str, off: usize) -> Vec<(String, bool, bool)> {
+    let mut segs: Vec<(String, bool, bool)> = Vec::new();
+    for (i, ch) in line.chars().enumerate() {
+        let (b, it) = styles.get(off + i).copied().unwrap_or((false, false));
+        match segs.last_mut() {
+            Some(s) if s.1 == b && s.2 == it => s.0.push(ch),
+            _ => segs.push((ch.to_string(), b, it)),
+        }
+    }
+    segs
+}
+
+fn font_spec(size: f64, family: &str, bold: bool, italic: bool) -> String {
+    format!(
+        "{}{}{}px '{}', sans-serif",
+        if italic { "italic " } else { "" },
+        if bold { "700 " } else { "" },
+        size,
+        family
+    )
 }
 
 fn xml_escape(s: &str) -> String {
@@ -988,6 +1058,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             points: Vec::new(),
             closed: false,
             inner: Vec::new(),
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -2182,6 +2253,42 @@ impl Engine {
         self.snapshot_now();
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             n.text = text.to_string();
+            // Spans address char offsets; clamp them to the new text.
+            let len = n.text.chars().count();
+            for s in &mut n.spans {
+                s.start = s.start.min(len);
+                s.len = s.len.min(len - s.start);
+            }
+            n.spans.retain(|s| s.len > 0);
+        }
+        self.touch();
+    }
+
+    /// Toggles bold/italic over a char range of a text node. Spans are
+    /// rebuilt from a per-char style map, so overlaps merge and split
+    /// cleanly no matter how ranges are applied.
+    pub fn set_span_style(&mut self, id: u32, start: usize, len: usize, field: &str, on: bool) {
+        if len == 0 || !["bold", "italic"].contains(&field) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let chars = n.text.chars().count();
+            let mut styles = vec![(false, false); chars];
+            for s in &n.spans {
+                for c in styles.iter_mut().skip(s.start).take(s.len) {
+                    c.0 |= s.bold;
+                    c.1 |= s.italic;
+                }
+            }
+            for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
+                if field == "bold" {
+                    c.0 = on;
+                } else {
+                    c.1 = on;
+                }
+            }
+            n.spans = run_length_spans(&styles);
         }
         self.touch();
     }
@@ -2251,6 +2358,7 @@ impl Engine {
             points: Vec::new(),
             closed: false,
             inner: Vec::new(),
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -2354,6 +2462,7 @@ impl Engine {
             points: contours.remove(0),
             closed: true,
             inner: contours,
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         };
@@ -2451,6 +2560,7 @@ impl Engine {
             points: to_anchors(out.remove(0)),
             closed: true,
             inner: out.into_iter().map(to_anchors).collect(),
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         };
@@ -2535,6 +2645,7 @@ impl Engine {
                 points: to_anchors(&outer),
                 closed: true,
                 inner: vec![to_anchors(&inner)],
+            spans: Vec::new(),
                 export_presets: Vec::new(),
                 children: Vec::new(),
             };
@@ -2624,6 +2735,7 @@ impl Engine {
             points: Vec::new(),
             closed: false,
             inner: Vec::new(),
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -3414,6 +3526,7 @@ impl Engine {
             points: Vec::new(),
             closed: false,
             inner: Vec::new(),
+            spans: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -3530,31 +3643,43 @@ fn draw_node(
                 _ => n.y + (n.h - block) / 2.0,
             };
             layouts.borrow_mut().insert(n.id, lines.clone());
+            let styles = char_styles(n);
+            let mut off = 0;
             for (i, line) in lines.iter().enumerate() {
                 // Each line slot is lh tall; the em box centers in it so a
                 // single line at "middle" matches the pre-wrap rendering.
                 let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0;
-                let tx = match n.text_align.as_str() {
-                    "center" => {
-                        let w = ctx.measure_text(line).map(|m| m.width()).unwrap_or(0.0);
-                        n.x + (n.w - w) / 2.0
-                    }
-                    "right" => {
-                        let w = ctx.measure_text(line).map(|m| m.width()).unwrap_or(0.0);
-                        n.x + n.w - w
-                    }
+                // Style runs render with their own font variant; the line
+                // width for alignment sums the styled segment widths.
+                let segs = line_segments(&styles, line, off);
+                off += line.chars().count() + 1; // +1: the break char
+                let widths: Vec<f64> = segs
+                    .iter()
+                    .map(|(s, b, it)| {
+                        ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
+                        ctx.measure_text(s).map(|m| m.width()).unwrap_or(0.0)
+                    })
+                    .collect();
+                let total: f64 = widths.iter().sum();
+                let mut tx = match n.text_align.as_str() {
+                    "center" => n.x + (n.w - total) / 2.0,
+                    "right" => n.x + n.w - total,
                     _ => n.x,
                 };
-                for p in &n.fills {
-                    ctx.set_global_alpha(alpha * p.opacity);
-                    ctx.set_fill_style_str(&p.color);
-                    let _ = ctx.fill_text(line, tx, ty);
-                }
-                for p in &n.strokes {
-                    ctx.set_global_alpha(alpha * p.opacity);
-                    ctx.set_stroke_style_str(&p.color);
-                    ctx.set_line_width(n.stroke_weight);
-                    let _ = ctx.stroke_text(line, tx, ty);
+                for ((seg, b, it), w) in segs.iter().zip(&widths) {
+                    ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
+                    for p in &n.fills {
+                        ctx.set_global_alpha(alpha * p.opacity);
+                        ctx.set_fill_style_str(&p.color);
+                        let _ = ctx.fill_text(seg, tx, ty);
+                    }
+                    for p in &n.strokes {
+                        ctx.set_global_alpha(alpha * p.opacity);
+                        ctx.set_stroke_style_str(&p.color);
+                        ctx.set_line_width(n.stroke_weight);
+                        let _ = ctx.stroke_text(seg, tx, ty);
+                    }
+                    tx += w;
                 }
             }
         }
@@ -3804,13 +3929,29 @@ fn svg_node(
                 "right" => ("end", x + n.w),
                 _ => ("start", x),
             };
+            let styles = char_styles(n);
             for p in &n.fills {
+                let mut off = 0;
                 for (i, line) in lines.iter().enumerate() {
                     // Baseline approximation: ~0.8em below the em top.
                     let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0 + n.font_size * 0.8;
+                    let mut body = String::new();
+                    for (seg, b, it) in line_segments(&styles, line, off) {
+                        if b || it {
+                            body.push_str(&format!(
+                                r#"<tspan{}{}>{}</tspan>"#,
+                                if b { r#" font-weight="700""# } else { "" },
+                                if it { r#" font-style="italic""# } else { "" },
+                                xml_escape(&seg)
+                            ));
+                        } else {
+                            body.push_str(&xml_escape(&seg));
+                        }
+                    }
+                    off += line.chars().count() + 1;
                     out.push_str(&format!(
                         r#"<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{}, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
-                        xml_escape(&n.font_family), n.font_size, xml_escape(&p.color), p.opacity, xml_escape(line)
+                        xml_escape(&n.font_family), n.font_size, xml_escape(&p.color), p.opacity, body
                     ));
                 }
             }
