@@ -282,6 +282,19 @@ fn list_at<'a>(nodes: &'a mut Vec<Node>, path: &[usize]) -> &'a mut Vec<Node> {
     list
 }
 
+/// The direct parent of a node, if it isn't at the root.
+fn parent_of(nodes: &[Node], id: u32) -> Option<&Node> {
+    for n in nodes {
+        if n.children.iter().any(|c| c.id == id) {
+            return Some(n);
+        }
+        if let Some(p) = parent_of(&n.children, id) {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
     n.x += dx;
     n.y += dy;
@@ -604,7 +617,18 @@ impl Tool {
 }
 
 /// Corner handles, clockwise from top-left.
-const HANDLES: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+/// Resize handles: four corners (drawn as squares) then four mid-edge
+/// grab bands (top, right, bottom, left — invisible, the whole edge).
+const HANDLES: [(f64, f64); 8] = [
+    (0.0, 0.0),
+    (1.0, 0.0),
+    (1.0, 1.0),
+    (0.0, 1.0),
+    (0.5, 0.0),
+    (1.0, 0.5),
+    (0.5, 1.0),
+    (0.0, 0.5),
+];
 
 enum Drag {
     None,
@@ -1804,7 +1828,7 @@ impl Engine {
         }
     }
 
-    pub fn pointer_move(&mut self, sx: f64, sy: f64) {
+    pub fn pointer_move(&mut self, sx: f64, sy: f64, shift: bool) {
         let (x, y) = self.to_world(sx, sy);
         if self.tool == Tool::Pen {
             if let Some(pen) = &mut self.pen {
@@ -1844,11 +1868,19 @@ impl Engine {
             }
             Drag::Draw { id, ox, oy } => {
                 let (id, ox, oy) = (*id, *ox, *oy);
+                let (mut dx, mut dy) = (x - ox, y - oy);
+                // Shift constrains to a square (circle), in the direction
+                // the pointer actually went.
+                if shift {
+                    let s = dx.abs().max(dy.abs());
+                    dx = if dx < 0.0 { -s } else { s };
+                    dy = if dy < 0.0 { -s } else { s };
+                }
                 if let Some(n) = find_node_mut(&mut self.nodes, id) {
-                    n.x = ox.min(x);
-                    n.y = oy.min(y);
-                    n.w = (x - ox).abs();
-                    n.h = (y - oy).abs();
+                    n.x = ox.min(ox + dx);
+                    n.y = oy.min(oy + dy);
+                    n.w = dx.abs();
+                    n.h = dy.abs();
                 }
             }
             Drag::Move { starts, ox, oy, moved, .. } => {
@@ -1867,20 +1899,68 @@ impl Engine {
                 self.apply_snapping(&ids);
             }
             Drag::Resize { starts, bx, by, bw, bh, handle, ox, oy } => {
-                let (dx, dy) = (x - *ox, y - *oy);
-                let (hx, hy) = HANDLES[*handle];
-                // A corner drag moves the edge(s) it sits on; the opposite
-                // corner stays anchored.
+                let (bx, by, bw, bh, handle, ox, oy) =
+                    (*bx, *by, *bw, *bh, *handle, *ox, *oy);
+                let starts = starts.clone();
+                let ids: Vec<u32> = starts.iter().map(|s| s.id).collect();
+                let (dx, dy) = (x - ox, y - oy);
+                let (hx, hy) = HANDLES[handle];
+                // A drag moves the edge(s) the handle sits on; the opposite
+                // edge stays anchored. Mid-edge handles leave the other
+                // axis alone.
                 let (mut nx, mut nw) = if hx == 0.0 {
-                    (*bx + dx, *bw - dx)
+                    (bx + dx, bw - dx)
+                } else if hx == 1.0 {
+                    (bx, bw + dx)
                 } else {
-                    (*bx, *bw + dx)
+                    (bx, bw)
                 };
                 let (mut ny, mut nh) = if hy == 0.0 {
-                    (*by + dy, *bh - dy)
+                    (by + dy, bh - dy)
+                } else if hy == 1.0 {
+                    (by, bh + dy)
                 } else {
-                    (*by, *bh + dy)
+                    (by, bh)
                 };
+                // The dragged edge snaps to nearby edges/centers — most
+                // usefully the parent frame's — unless shift constrains.
+                self.guides.clear();
+                if !shift {
+                    if hx != 0.5 {
+                        let edge = if hx == 0.0 { nx } else { nx + nw };
+                        if let Some((pos, from, to)) = self.snap_edge(edge, true, &ids) {
+                            if hx == 0.0 {
+                                nw += nx - pos;
+                                nx = pos;
+                            } else {
+                                nw = pos - nx;
+                            }
+                            self.guides.push(Guide {
+                                vertical: true,
+                                pos,
+                                from: from.min(ny),
+                                to: to.max(ny + nh),
+                            });
+                        }
+                    }
+                    if hy != 0.5 {
+                        let edge = if hy == 0.0 { ny } else { ny + nh };
+                        if let Some((pos, from, to)) = self.snap_edge(edge, false, &ids) {
+                            if hy == 0.0 {
+                                nh += ny - pos;
+                                ny = pos;
+                            } else {
+                                nh = pos - ny;
+                            }
+                            self.guides.push(Guide {
+                                vertical: false,
+                                pos,
+                                from: from.min(nx),
+                                to: to.max(nx + nw),
+                            });
+                        }
+                    }
+                }
                 if nw < 0.0 {
                     nx += nw;
                     nw = -nw;
@@ -1889,14 +1969,27 @@ impl Engine {
                     ny += nh;
                     nh = -nh;
                 }
-                let fx = if *bw > 0.0 { nw / *bw } else { 1.0 };
-                let fy = if *bh > 0.0 { nh / *bh } else { 1.0 };
-                let (obx, oby) = (*bx, *by);
+                // Shift keeps the original proportions, following whichever
+                // axis changed more (corner handles only).
+                if shift && hx != 0.5 && hy != 0.5 && bw > 0.0 && bh > 0.0 {
+                    let (fx, fy) = (nw / bw, nh / bh);
+                    let f = if (fx - 1.0).abs() >= (fy - 1.0).abs() { fx } else { fy };
+                    nw = bw * f;
+                    nh = bh * f;
+                    if hx == 0.0 {
+                        nx = bx + bw - nw;
+                    }
+                    if hy == 0.0 {
+                        ny = by + bh - nh;
+                    }
+                }
+                let fx = if bw > 0.0 { nw / bw } else { 1.0 };
+                let fy = if bh > 0.0 { nh / bh } else { 1.0 };
                 let scaled: Vec<Node> = starts
                     .iter()
                     .map(|s| {
                         let mut c = s.clone();
-                        scale_subtree(&mut c, obx, oby, nx, ny, fx, fy);
+                        scale_subtree(&mut c, bx, by, nx, ny, fx, fy);
                         c
                     })
                     .collect();
@@ -2037,7 +2130,9 @@ impl Engine {
             Tool::Text => "text",
             Tool::Select => match self.handle_at(sx, sy) {
                 Some(0) | Some(2) => "nwse-resize",
-                Some(_) => "nesw-resize",
+                Some(1) | Some(3) => "nesw-resize",
+                Some(4) | Some(6) => "ns-resize",
+                Some(_) => "ew-resize",
                 None => "default",
             },
             _ => "crosshair",
@@ -3361,7 +3456,7 @@ impl Engine {
                     ctx.stroke_rect(bx, by, bx2 - bx, by2 - by);
                 }
                 let hs = 7.0 / self.zoom;
-                for (hx, hy) in HANDLES {
+                for &(hx, hy) in &HANDLES[..4] {
                     let (px, py) =
                         (bx + hx * (bx2 - bx) - hs / 2.0, by + hy * (by2 - by) - hs / 2.0);
                     ctx.set_fill_style_str("#ffffff");
@@ -3560,11 +3655,32 @@ impl Engine {
         }
         let (bx, by, bx2, by2) = self.selection_bbox(&self.selection)?;
         let grab = 6.0;
-        HANDLES.iter().position(|(hx, hy)| {
+        if let Some(i) = HANDLES[..4].iter().position(|(hx, hy)| {
             let px = (bx + hx * (bx2 - bx)) * self.zoom + self.pan_x;
             let py = (by + hy * (by2 - by)) * self.zoom + self.pan_y;
             (sx - px).abs() <= grab && (sy - py).abs() <= grab
-        })
+        }) {
+            return Some(i);
+        }
+        // Whole edges act as grab bands between the corner zones.
+        let (x0, y0) = (bx * self.zoom + self.pan_x, by * self.zoom + self.pan_y);
+        let (x1, y1) = (bx2 * self.zoom + self.pan_x, by2 * self.zoom + self.pan_y);
+        let band = 4.0;
+        let inx = sx > x0 + grab && sx < x1 - grab;
+        let iny = sy > y0 + grab && sy < y1 - grab;
+        if inx && (sy - y0).abs() <= band {
+            return Some(4);
+        }
+        if iny && (sx - x1).abs() <= band {
+            return Some(5);
+        }
+        if inx && (sy - y1).abs() <= band {
+            return Some(6);
+        }
+        if iny && (sx - x0).abs() <= band {
+            return Some(7);
+        }
+        None
     }
 
     fn selection_bbox(&self, ids: &[u32]) -> Option<(f64, f64, f64, f64)> {
@@ -3580,6 +3696,43 @@ impl Engine {
             }
         }
         bbox
+    }
+
+    /// Nearest snap candidate for one moving edge coordinate, against the
+    /// edges/centers of top-level nodes and of the moved nodes' direct
+    /// parents (so a child's resize snaps to its frame). Returns the
+    /// snapped position plus the candidate's perpendicular span for the
+    /// guide line.
+    fn snap_edge(&self, v: f64, vertical: bool, exclude: &[u32]) -> Option<(f64, f64, f64)> {
+        let threshold = 6.0 / self.zoom;
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        let mut consider = |n: &Node| {
+            let cands = if vertical {
+                [n.x, n.x + n.w / 2.0, n.x + n.w]
+            } else {
+                [n.y, n.y + n.h / 2.0, n.y + n.h]
+            };
+            let (from, to) = if vertical { (n.y, n.y + n.h) } else { (n.x, n.x + n.w) };
+            for cand in cands {
+                let d = cand - v;
+                if d.abs() < threshold && best.map_or(true, |(bd, ..)| d.abs() < bd.abs()) {
+                    best = Some((d, cand, from, to));
+                }
+            }
+        };
+        for n in &self.nodes {
+            if n.visible && !exclude.contains(&n.id) {
+                consider(n);
+            }
+        }
+        for &id in exclude {
+            if let Some(p) = parent_of(&self.nodes, id) {
+                if p.visible {
+                    consider(p);
+                }
+            }
+        }
+        best.map(|(_, pos, from, to)| (pos, from, to))
     }
 
     /// Snaps the moving selection's bounding box edges/centers to other

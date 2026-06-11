@@ -1147,6 +1147,54 @@ assert(
   "panel resize of a group is one undo step",
 );
 
+// Shift constraints, edge resize bands, and resize snapping.
+const ehz = new Engine();
+ehz.set_tool("rect");
+ehz.pointer_down(100, 100, false, false);
+ehz.pointer_move(220, 160, true); // shift: square along the larger delta
+ehz.pointer_up();
+{
+  const n = JSON.parse(ehz.scene()).nodes[0];
+  assert(n.w === 120 && n.h === 120, "shift-draw constrains to a square");
+  ehz.set_tool("select");
+  ehz.select(n.id, false);
+}
+ehz.pointer_down(220, 160, false, false); // right edge band, mid-height
+ehz.pointer_move(300, 200, false);
+ehz.pointer_up();
+{
+  const n = JSON.parse(ehz.scene()).nodes[0];
+  assert(n.w === 200 && n.h === 120, "edge band resizes one axis only");
+}
+ehz.pointer_down(300, 220, false, false); // SE corner
+ehz.pointer_move(400, 230, true);
+ehz.pointer_up();
+{
+  const n = JSON.parse(ehz.scene()).nodes[0];
+  assert(
+    Math.abs(n.w / n.h - 200 / 120) < 0.02,
+    "shift-resize keeps the original proportions",
+  );
+}
+const esz = new Engine();
+esz.set_tool("frame");
+esz.pointer_down(100, 100, false, false);
+esz.pointer_move(400, 400, false);
+esz.pointer_up();
+esz.set_tool("rect");
+esz.pointer_down(150, 150, false, false);
+esz.pointer_move(250, 250, false);
+esz.pointer_up();
+esz.set_tool("select");
+esz.select(JSON.parse(esz.scene()).nodes[0].children[0].id, false);
+esz.pointer_down(250, 200, false, false); // child's right edge band
+esz.pointer_move(396, 200, false); // within 6px of the frame's right edge
+esz.pointer_up();
+{
+  const c = JSON.parse(esz.scene()).nodes[0].children[0];
+  assert(c.x + c.w === 400, "resize-drag snaps the edge to the parent frame");
+}
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

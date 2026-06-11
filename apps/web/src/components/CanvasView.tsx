@@ -405,7 +405,7 @@ export function CanvasView({
         }}
         onPointerMove={(e) => {
           const { x, y } = pos(e);
-          engine.pointer_move(x, y);
+          engine.pointer_move(x, y, e.shiftKey);
           e.currentTarget.style.cursor = engine.cursor(x, y);
           const s = sceneRef.current;
           reportCursor((x - s.panX) / s.zoom, (y - s.panY) / s.zoom);

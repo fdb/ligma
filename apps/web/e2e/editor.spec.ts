@@ -1513,3 +1513,54 @@ test("panel W field resizes frame and group contents proportionally", async ({ p
     })
     .toEqual([200, [100, 80]]);
 });
+
+test("shift constraints, edge-band resize, and snap-to-frame", async ({ page }) => {
+  await openNewDocument(page);
+  const box = await canvasBox(page);
+
+  // Shift while drawing constrains to a square.
+  await page.keyboard.press("r");
+  await page.mouse.move(box.x + 250, box.y + 200);
+  await page.mouse.down();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + 370, box.y + 260, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect
+    .poll(async () => {
+      const n = (await sceneOf(page)).nodes[0];
+      return [n.w, n.h];
+    })
+    .toEqual([120, 120]);
+
+  // The whole edge is a grab band: hovering shows a resize cursor, and
+  // dragging it resizes that axis only.
+  await clickCanvas(page, 310, 260); // select
+  await page.mouse.move(box.x + 370, box.y + 260); // right edge, mid-height
+  await expect
+    .poll(() => page.locator("canvas").evaluate((el) => el.style.cursor))
+    .toBe("ew-resize");
+  await drag(page, 370, 260, 450, 290);
+  await expect
+    .poll(async () => {
+      const n = (await sceneOf(page)).nodes[0];
+      return [n.w, n.h];
+    })
+    .toEqual([200, 120]);
+
+  // Dragging a child's edge snaps to its parent frame's edge.
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("f");
+  await drag(page, 500, 150, 800, 450);
+  await page.keyboard.press("r");
+  await drag(page, 550, 200, 650, 300);
+  await clickCanvas(page, 600, 250);
+  await drag(page, 650, 250, 796, 250); // right edge lands 4px short of the frame edge
+  await expect
+    .poll(async () => {
+      const f = (await sceneOf(page)).nodes.find((n: any) => n.kind === "frame");
+      const c = f.children[0];
+      return c.x + c.w === f.x + f.w;
+    })
+    .toBe(true);
+});

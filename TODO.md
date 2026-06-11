@@ -6,12 +6,13 @@
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
 - pathfinder operations stay non-destructive: they appear as a group, with the source shapes inside, until flattened
 - Double clicking an item in a group should select that item, allowing operations on that (e.g. resizing, editing text, and so on)
-- Hold shift while dragging to constrain proportions, e.g. while creating a new shape
 - Custom color picker should also have "document colors" - colors that appear on this document, sorted by most frequently used
 - If a frame is empty dragging inside of a frame drags the frame. if it has one item, dragging inside of it will create a drag selection rectangle to select items of the frame
-- You can also drag the sides of an item to change the width/height, not just the corner points
-- Dragging the corner points should also snap to the frame (e.g. to snap the width to the width of the frame)
 # DONE (things are moved here once they are done)
+
+- Shift constrains drags: squares/circles while drawing, original proportions while resizing from a corner
+- The sides of the selection box are grab bands — drag any edge to resize that axis alone (with ns/ew cursors); corners keep working as before
+- Resize drags snap the moving edge to nearby edges/centers — most usefully the parent frame's — with the same red guide lines as move snapping
 
 - BUG fix: resizing a frame or group through the panel's W/H fields now scales its contents proportionally about the top-left (handle drags already did); groups gained W/H fields in the panel
 - BUG fix: typing in a text item no longer overlaps the previous text — the canvas stops drawing a node while its inline editor is open, even when the node is nested in a frame or group
