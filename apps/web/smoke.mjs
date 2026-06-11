@@ -471,6 +471,99 @@ assert(
 e16.undo();
 assert(JSON.parse(e16.scene()).nodes[0].fontFamily === "Hanken Grotesk", "font change is undoable");
 
+// Pen tool: open paths, smooth anchors, closing, hit-testing, transforms.
+const e17 = new Engine();
+e17.set_tool("pen");
+assert(!e17.pen_active(), "pen inactive before first click");
+e17.pointer_down(100, 100, false, false);
+e17.pointer_up();
+e17.pointer_down(200, 100, false, false);
+e17.pointer_up();
+e17.pointer_down(200, 200, false, false);
+e17.pointer_move(240, 240); // drag out handles -> smooth anchor
+e17.pointer_up();
+assert(e17.pen_active(), "pen active while drawing");
+e17.pen_commit();
+assert(!e17.pen_active(), "commit clears the pen state");
+let s17 = JSON.parse(e17.scene());
+assert(s17.tool === "select", "committing returns to the select tool");
+const path17 = s17.nodes[0];
+assert(path17.kind === "path", "pen commit creates a path node");
+assert(path17.points.length === 3, "three anchors placed");
+assert(!path17.closed, "commit leaves the path open");
+assert(path17.fills.length === 0 && path17.strokes.length === 1, "open path is stroke-only");
+const smooth = path17.points[2];
+assert(smooth.hxOut === 240 && smooth.hyOut === 240, "click-drag sets the out handle");
+assert(
+  smooth.hxIn === 2 * smooth.x - 240 && smooth.hyIn === 2 * smooth.y - 240,
+  "in handle mirrors the out handle",
+);
+assert(path17.points[0].hxOut === path17.points[0].x, "plain click places a corner anchor");
+assert(s17.selection[0] === path17.id, "committed path is selected");
+e17.undo();
+assert(JSON.parse(e17.scene()).nodes.length === 0, "whole path is one undo step");
+e17.redo();
+
+// Hit-testing: on the stroke hits, empty bbox corner misses.
+assert(e17.node_at(150, 100) === path17.id, "click on a segment hits the path");
+assert(e17.node_at(120, 180) == null, "empty corner of the path bbox misses");
+
+// Closing by clicking the first anchor.
+const e18 = new Engine();
+e18.set_tool("pen");
+for (const [px, py] of [[300, 300], [400, 300], [350, 380]]) {
+  e18.pointer_down(px, py, false, false);
+  e18.pointer_up();
+}
+e18.pointer_down(301, 301, false, false); // within close tolerance of the first
+let s18 = JSON.parse(e18.scene());
+const tri = s18.nodes[0];
+assert(tri.kind === "path" && tri.closed, "clicking the first anchor closes the path");
+assert(tri.fills.length === 1, "closed path gets a fill");
+assert(e18.node_at(350, 320) === tri.id, "interior of a closed path hits");
+
+// Transforms keep anchors in sync.
+const ax0 = tri.points[0].x;
+e18.nudge(10, 0);
+s18 = JSON.parse(e18.scene());
+assert(s18.nodes[0].points[0].x === ax0 + 10, "nudge shifts anchors with the box");
+const w0 = s18.nodes[0].w;
+e18.set_field(tri.id, "w", w0 * 2);
+s18 = JSON.parse(e18.scene());
+assert(Math.abs(s18.nodes[0].w - w0 * 2) < 0.01, "set_field w doubles the path width");
+const xs18 = s18.nodes[0].points.map((p) => p.x);
+assert(
+  Math.abs(Math.max(...xs18) - Math.min(...xs18) - w0 * 2) < 0.01,
+  "anchors scale with the box",
+);
+
+// SVG export and persistence round-trip.
+const svg18 = e18.export_svg(tri.id);
+assert(svg18.includes('<path d="M ') && svg18.includes(" Z"), "SVG export emits a closed path d");
+const e18b = new Engine();
+e18b.load_json(e18.to_json());
+const tri2 = JSON.parse(e18b.scene()).nodes[0];
+assert(tri2.points.length === 3 && tri2.closed, "path round-trips through JSON");
+
+// Switching tools mid-draw commits; a single anchor is discarded.
+const e19 = new Engine();
+e19.set_tool("pen");
+e19.pointer_down(0, 0, false, false);
+e19.pointer_up();
+e19.set_tool("select");
+assert(JSON.parse(e19.scene()).nodes.length === 0, "single-anchor pen draw is discarded");
+e19.set_tool("pen");
+e19.pointer_down(0, 0, false, false);
+e19.pointer_up();
+e19.pointer_down(50, 50, false, false);
+e19.pointer_up();
+e19.set_tool("rect");
+const s19 = JSON.parse(e19.scene());
+assert(
+  s19.nodes.length === 1 && s19.nodes[0].kind === "path",
+  "switching tools commits the in-progress path",
+);
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

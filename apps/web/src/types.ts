@@ -1,6 +1,17 @@
-export type NodeKind = "frame" | "group" | "rect" | "ellipse" | "text" | "image";
+export type NodeKind = "frame" | "group" | "rect" | "ellipse" | "text" | "image" | "path";
 
-export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "hand";
+export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "pen" | "hand";
+
+/** A bezier anchor (path nodes). Absolute world coordinates; handles
+ * coinciding with the point mean a corner. */
+export interface PathAnchor {
+  x: number;
+  y: number;
+  hxIn: number;
+  hyIn: number;
+  hxOut: number;
+  hyOut: number;
+}
 
 export interface Paint {
   color: string;
@@ -36,6 +47,8 @@ export interface SceneNode {
   textAlign: "left" | "center" | "right";
   textValign: "top" | "middle" | "bottom";
   image: string;
+  points: PathAnchor[];
+  closed: boolean;
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }

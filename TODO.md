@@ -3,8 +3,11 @@
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - more complex path operations like outline stroke, or even pathfinder operations like union/subtract,intersect,exclude (flatten + "frame selection" in the right-click menu wait on this)
+- Bezier path tool, part 2 — node editing: changing path nodes, changing bezier control points, changing from round to flat point, dragging both control points at the same time or differently, snapping bezier control points, snapping on-curve points, drag-selecting points and moving a selection of points, ...
 
 # DONE (things are moved here once they are done)
+
+- Bezier path tool, part 1 — pen drawing (P): click places corner anchors, click-drag pulls out symmetric handles (smooth anchors), clicking the first anchor closes the path (closed paths get a fill), Enter/Escape/tool-switch commits an open path; paths render with beziers on canvas and in SVG export, hit-test against the actual outline, and move/resize/undo like any node
 
 - Session chat: a floating chat bubble in the editor; messages broadcast live to everyone in the file through the presence room (ephemeral — nothing stored), with an unread badge
 

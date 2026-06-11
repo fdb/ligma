@@ -11,6 +11,7 @@ const tools: { id: Tool; icon: string; label: string; key: string }[] = [
   { id: "frame", icon: "frame", label: "Frame", key: "F" },
   { id: "rect", icon: "rect", label: "Rectangle", key: "R" },
   { id: "ellipse", icon: "ellipse", label: "Ellipse", key: "O" },
+  { id: "pen", icon: "pen", label: "Pen", key: "P" },
   { id: "text", icon: "text", label: "Text", key: "T" },
   { id: "hand", icon: "hand", label: "Hand", key: "H" },
 ];

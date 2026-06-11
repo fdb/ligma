@@ -30,6 +30,7 @@ const toolKeys: Record<string, Tool> = {
   r: "rect",
   o: "ellipse",
   t: "text",
+  p: "pen",
   h: "hand",
 };
 
@@ -160,7 +161,10 @@ export function CanvasView({
       } else if (e.key === "Escape") {
         onExitCommentMode();
         engine.clear_selection();
+        // Leaving the pen tool commits the in-progress path (engine-side).
         engine.set_tool("select");
+      } else if (e.key === "Enter" && engine.pen_active()) {
+        engine.pen_commit();
       } else if (!mod && e.key.toLowerCase() === "c") {
         onToggleCommentMode();
       } else if (e.key.startsWith("Arrow")) {

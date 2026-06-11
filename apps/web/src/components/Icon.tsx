@@ -18,6 +18,21 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M2.5 11l3-3 2.5 2.5L11 7.5l2.5 3" />
     </>
   ),
+  pen: (
+    <>
+      <path d="M8 1.8l2.8 4.8-1 5.4H6.2l-1-5.4z" />
+      <path d="M8 1.8v7.4" />
+      <circle cx="8" cy="10.4" r="1.2" />
+      <path d="M6.6 14.2h2.8" />
+    </>
+  ),
+  path: (
+    <>
+      <path d="M2.5 12.5C5 6 11 6 13.5 3.5" />
+      <rect x="1" y="11" width="3" height="3" />
+      <rect x="12" y="2" width="3" height="3" />
+    </>
+  ),
   comment: (
     <path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 3v-3H4.5a2 2 0 0 1-2-2z" />
   ),

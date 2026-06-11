@@ -28,6 +28,21 @@ pub enum NodeKind {
     Ellipse,
     Text,
     Image,
+    Path,
+}
+
+/// A path anchor point with its bezier control handles. Everything is in
+/// absolute world coordinates (like all node geometry); a corner anchor's
+/// handles coincide with the point, degenerating its curves to lines.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Anchor {
+    pub x: f64,
+    pub y: f64,
+    pub hx_in: f64,
+    pub hy_in: f64,
+    pub hx_out: f64,
+    pub hy_out: f64,
 }
 
 /// A single fill or stroke: a color with its own opacity.
@@ -133,6 +148,12 @@ pub struct Node {
     /// live in R2 and the browser keeps decoded elements in a JS cache.
     #[serde(default)]
     pub image: String,
+    /// Bezier anchors (path nodes only). x/y/w/h is the derived bounding
+    /// box of the flattened curve.
+    #[serde(default)]
+    pub points: Vec<Anchor>,
+    #[serde(default)]
+    pub closed: bool,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -203,6 +224,14 @@ fn list_at<'a>(nodes: &'a mut Vec<Node>, path: &[usize]) -> &'a mut Vec<Node> {
 fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
     n.x += dx;
     n.y += dy;
+    for a in &mut n.points {
+        a.x += dx;
+        a.y += dy;
+        a.hx_in += dx;
+        a.hy_in += dy;
+        a.hx_out += dx;
+        a.hy_out += dy;
+    }
     for c in &mut n.children {
         shift_subtree(c, dx, dy);
     }
@@ -215,12 +244,25 @@ fn scale_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx: f64, fy: 
     n.y = ny + (n.y - by) * fy;
     n.w *= fx;
     n.h *= fy;
+    for a in &mut n.points {
+        a.x = nx + (a.x - bx) * fx;
+        a.y = ny + (a.y - by) * fy;
+        a.hx_in = nx + (a.hx_in - bx) * fx;
+        a.hy_in = ny + (a.hy_in - by) * fy;
+        a.hx_out = nx + (a.hx_out - bx) * fx;
+        a.hy_out = ny + (a.hy_out - by) * fy;
+    }
     for c in &mut n.children {
         scale_subtree(c, bx, by, nx, ny, fx, fy);
     }
 }
 
 fn round_subtree(n: &mut Node) {
+    // Rounding a path's box without its anchors would desync them, and
+    // rounding anchors would warp curves — leave paths exact.
+    if n.kind == NodeKind::Path {
+        return;
+    }
     n.x = n.x.round();
     n.y = n.y.round();
     n.w = n.w.round().max(1.0);
@@ -270,6 +312,108 @@ fn dissolve_empty_groups(nodes: &mut Vec<Node>) {
     nodes.retain(|n| n.kind != NodeKind::Group || !n.children.is_empty());
 }
 
+// ----- bezier path geometry -----
+
+/// Samples per bezier segment when flattening (bounds, hit-testing).
+const FLATTEN_STEPS: usize = 16;
+
+fn cubic_point(p0: (f64, f64), c0: (f64, f64), c1: (f64, f64), p1: (f64, f64), t: f64) -> (f64, f64) {
+    let u = 1.0 - t;
+    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    (
+        a * p0.0 + b * c0.0 + c * c1.0 + d * p1.0,
+        a * p0.1 + b * c0.1 + c * c1.1 + d * p1.1,
+    )
+}
+
+/// Flattens the path into a polyline (closing segment included if closed).
+fn flatten_path(points: &[Anchor], closed: bool) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    if points.is_empty() {
+        return out;
+    }
+    out.push((points[0].x, points[0].y));
+    let segs = if closed { points.len() } else { points.len() - 1 };
+    for i in 0..segs {
+        let a = &points[i];
+        let b = &points[(i + 1) % points.len()];
+        for s in 1..=FLATTEN_STEPS {
+            let t = s as f64 / FLATTEN_STEPS as f64;
+            out.push(cubic_point(
+                (a.x, a.y),
+                (a.hx_out, a.hy_out),
+                (b.hx_in, b.hy_in),
+                (b.x, b.y),
+                t,
+            ));
+        }
+    }
+    out
+}
+
+fn path_bounds(points: &[Anchor], closed: bool) -> (f64, f64, f64, f64) {
+    let flat = flatten_path(points, closed);
+    let min_x = flat.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+    let min_y = flat.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+    let max_x = flat.iter().map(|p| p.0).fold(f64::MIN, f64::max);
+    let max_y = flat.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// Recomputes a path node's bounding box from its anchors.
+fn sync_path_bounds(n: &mut Node) {
+    if n.kind == NodeKind::Path && !n.points.is_empty() {
+        let (x, y, w, h) = path_bounds(&n.points, n.closed);
+        n.x = x;
+        n.y = y;
+        n.w = w;
+        n.h = h;
+    }
+}
+
+fn point_in_polygon(poly: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+fn dist_sq_to_segment(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let len_sq = dx * dx + dy * dy;
+    let t = if len_sq > 0.0 {
+        (((px - ax) * dx + (py - ay) * dy) / len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (cx, cy) = (ax + t * dx, ay + t * dy);
+    (px - cx) * (px - cx) + (py - cy) * (py - cy)
+}
+
+/// Precise hit test for a path node: within `tol` of the (flattened)
+/// outline, or inside the fill when one is painted.
+fn path_hit(n: &Node, x: f64, y: f64, tol: f64) -> bool {
+    if n.points.len() < 2 {
+        return false;
+    }
+    let flat = flatten_path(&n.points, n.closed);
+    let reach = tol.max(n.stroke_weight / 2.0);
+    for w in flat.windows(2) {
+        if dist_sq_to_segment(x, y, w[0].0, w[0].1, w[1].0, w[1].1) <= reach * reach {
+            return true;
+        }
+    }
+    // Canvas fills open paths by implicitly closing them; match that.
+    !n.fills.is_empty() && point_in_polygon(&flat, x, y)
+}
+
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -286,6 +430,7 @@ enum Tool {
     Rect,
     Ellipse,
     Text,
+    Pen,
     Hand,
 }
 
@@ -297,6 +442,7 @@ impl Tool {
             Tool::Rect => "rect",
             Tool::Ellipse => "ellipse",
             Tool::Text => "text",
+            Tool::Pen => "pen",
             Tool::Hand => "hand",
         }
     }
@@ -307,6 +453,7 @@ impl Tool {
             "rect" => Tool::Rect,
             "ellipse" => Tool::Ellipse,
             "text" => Tool::Text,
+            "pen" => Tool::Pen,
             "hand" => Tool::Hand,
             _ => Tool::Select,
         }
@@ -352,6 +499,16 @@ enum Drag {
         cx: f64,
         cy: f64,
     },
+}
+
+/// An in-progress pen path. Lives outside the document until committed,
+/// so undo treats the whole path as one step.
+struct PenState {
+    anchors: Vec<Anchor>,
+    /// Pointer position in world space, for the rubber-band preview.
+    cur: (f64, f64),
+    /// Dragging out the last anchor's handles (click-drag = smooth point).
+    dragging: bool,
 }
 
 // ----- document & persistence -----
@@ -422,6 +579,8 @@ fn migrate_v1(doc: v1::Document) -> Document {
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
+            points: Vec::new(),
+            closed: false,
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -463,6 +622,7 @@ pub struct Engine {
     pan_y: f64,
     zoom: f64,
     drag: Drag,
+    pen: Option<PenState>,
     guides: Vec<Guide>,
     editing: Option<u32>,
     pending_undo: Option<Vec<Node>>,
@@ -492,6 +652,7 @@ impl Engine {
             pan_y: 0.0,
             zoom: 1.0,
             drag: Drag::None,
+            pen: None,
             guides: Vec::new(),
             editing: None,
             pending_undo: None,
@@ -572,7 +733,76 @@ impl Engine {
     // ----- tools -----
 
     pub fn set_tool(&mut self, tool: &str) {
-        self.tool = Tool::from_str(tool);
+        let next = Tool::from_str(tool);
+        // Leaving the pen tool commits whatever was drawn so far.
+        if self.tool == Tool::Pen && next != Tool::Pen {
+            self.finish_pen(false);
+        }
+        self.tool = next;
+        self.touch();
+    }
+
+    // ----- pen tool -----
+
+    /// True while a pen path is being drawn (anchors placed, not committed).
+    pub fn pen_active(&self) -> bool {
+        self.pen.is_some()
+    }
+
+    /// Commits the in-progress pen path as an open path (Enter/Escape).
+    pub fn pen_commit(&mut self) {
+        self.finish_pen(false);
+    }
+
+    /// Turns the accumulated pen anchors into a path node (one undo step)
+    /// and returns to the select tool. Fewer than two anchors = discard.
+    fn finish_pen(&mut self, closed: bool) {
+        let Some(pen) = self.pen.take() else {
+            return;
+        };
+        if pen.anchors.len() < 2 {
+            self.touch();
+            return;
+        }
+        self.snapshot_now();
+        let (x, y, w, h) = path_bounds(&pen.anchors, closed);
+        let id = self.add_node(NodeKind::Path, x, y, w.max(1.0), h.max(1.0));
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.points = pen.anchors;
+            n.closed = closed;
+            // Open paths read as lines: stroke only. Closing adds the fill.
+            if !closed {
+                n.fills.clear();
+            }
+            n.strokes = vec![Paint { color: "#18181b".to_string(), opacity: 1.0 }];
+        }
+        // Same frame parenting rule as drawn shapes: center inside a frame
+        // nests the path under it.
+        let center = find_node(&self.nodes, id).map(|n| (n.x + n.w / 2.0, n.y + n.h / 2.0));
+        if let Some((cx, cy)) = center {
+            let target = self
+                .nodes
+                .iter()
+                .rev()
+                .find(|f| {
+                    f.kind == NodeKind::Frame
+                        && f.id != id
+                        && f.visible
+                        && !f.locked
+                        && f.contains(cx, cy)
+                })
+                .map(|f| f.id);
+            if let Some(fid) = target {
+                if let Some(pos) = self.nodes.iter().position(|n| n.id == id) {
+                    let node = self.nodes.remove(pos);
+                    if let Some(f) = find_node_mut(&mut self.nodes, fid) {
+                        f.children.push(node);
+                    }
+                }
+            }
+        }
+        self.selection = vec![id];
+        self.tool = Tool::Select;
         self.touch();
     }
 
@@ -644,6 +874,34 @@ impl Engine {
                 }
                 self.touch();
             }
+            Tool::Pen => {
+                // Clicking the first anchor again closes the path.
+                let close_tol = 6.0 / self.zoom;
+                if let Some(pen) = &self.pen {
+                    if pen.anchors.len() >= 2 {
+                        let f = &pen.anchors[0];
+                        if (x - f.x).hypot(y - f.y) <= close_tol {
+                            self.finish_pen(true);
+                            return;
+                        }
+                    }
+                }
+                let pen = self.pen.get_or_insert_with(|| PenState {
+                    anchors: Vec::new(),
+                    cur: (x, y),
+                    dragging: false,
+                });
+                pen.anchors.push(Anchor {
+                    x,
+                    y,
+                    hx_in: x,
+                    hy_in: y,
+                    hx_out: x,
+                    hy_out: y,
+                });
+                pen.dragging = true;
+                self.touch();
+            }
             tool => {
                 self.begin_mutation();
                 let kind = match tool {
@@ -662,6 +920,22 @@ impl Engine {
 
     pub fn pointer_move(&mut self, sx: f64, sy: f64) {
         let (x, y) = self.to_world(sx, sy);
+        if self.tool == Tool::Pen {
+            if let Some(pen) = &mut self.pen {
+                pen.cur = (x, y);
+                if pen.dragging {
+                    // Drag out symmetric handles: a smooth anchor.
+                    if let Some(a) = pen.anchors.last_mut() {
+                        a.hx_out = x;
+                        a.hy_out = y;
+                        a.hx_in = 2.0 * a.x - x;
+                        a.hy_in = 2.0 * a.y - y;
+                    }
+                }
+                self.touch();
+            }
+            return;
+        }
         match &mut self.drag {
             Drag::None => {
                 let hit = if self.tool == Tool::Select { self.hit_test(x, y) } else { None };
@@ -759,6 +1033,25 @@ impl Engine {
     }
 
     pub fn pointer_up(&mut self) {
+        if self.tool == Tool::Pen {
+            if let Some(pen) = &mut self.pen {
+                if pen.dragging {
+                    pen.dragging = false;
+                    // A barely-moved drag is a click: keep it a corner.
+                    let tol = 2.0 / self.zoom;
+                    if let Some(a) = pen.anchors.last_mut() {
+                        if (a.hx_out - a.x).hypot(a.hy_out - a.y) < tol {
+                            a.hx_in = a.x;
+                            a.hy_in = a.y;
+                            a.hx_out = a.x;
+                            a.hy_out = a.y;
+                        }
+                    }
+                    self.touch();
+                }
+            }
+            return;
+        }
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Draw { id, .. } => {
                 if let Some(n) = find_node_mut(&mut self.nodes, id) {
@@ -962,6 +1255,19 @@ impl Engine {
                 "y" => {
                     let dy = value - n.y;
                     shift_subtree(n, 0.0, dy);
+                }
+                // Resizing a path scales its anchors about the box origin.
+                "w" if n.kind == NodeKind::Path => {
+                    let f = value.max(1.0) / n.w.max(1.0);
+                    let (bx, by) = (n.x, n.y);
+                    scale_subtree(n, bx, by, bx, by, f, 1.0);
+                    sync_path_bounds(n);
+                }
+                "h" if n.kind == NodeKind::Path => {
+                    let f = value.max(1.0) / n.h.max(1.0);
+                    let (bx, by) = (n.x, n.y);
+                    scale_subtree(n, bx, by, bx, by, 1.0, f);
+                    sync_path_bounds(n);
                 }
                 "w" if n.kind != NodeKind::Group => n.w = value.max(1.0),
                 "h" if n.kind != NodeKind::Group => n.h = value.max(1.0),
@@ -1170,6 +1476,8 @@ impl Engine {
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
+            points: Vec::new(),
+            closed: false,
             export_presets: Vec::new(),
             children,
         };
@@ -1645,6 +1953,41 @@ impl Engine {
             ctx.stroke();
         }
 
+        // In-progress pen path: segments so far, a rubber band to the
+        // cursor, anchor dots, and a ring on the first anchor once the
+        // path can be closed by clicking it.
+        if let Some(pen) = &self.pen {
+            if !pen.anchors.is_empty() {
+                ctx.set_stroke_style_str("#0ea5e9");
+                ctx.set_line_width(1.5 / self.zoom);
+                trace_path(ctx, &pen.anchors, false);
+                if !pen.dragging {
+                    let last = pen.anchors.last().unwrap();
+                    ctx.bezier_curve_to(
+                        last.hx_out,
+                        last.hy_out,
+                        pen.cur.0,
+                        pen.cur.1,
+                        pen.cur.0,
+                        pen.cur.1,
+                    );
+                }
+                ctx.stroke();
+                let hs = 6.0 / self.zoom;
+                for (i, a) in pen.anchors.iter().enumerate() {
+                    ctx.set_fill_style_str("#ffffff");
+                    ctx.fill_rect(a.x - hs / 2.0, a.y - hs / 2.0, hs, hs);
+                    ctx.set_line_width(1.0 / self.zoom);
+                    ctx.stroke_rect(a.x - hs / 2.0, a.y - hs / 2.0, hs, hs);
+                    if i == 0 && pen.anchors.len() >= 2 {
+                        ctx.begin_path();
+                        let _ = ctx.arc(a.x, a.y, 6.0 / self.zoom, 0.0, TAU);
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
         // Frame labels are drawn in screen space so they stay readable at
         // any zoom level.
         let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
@@ -1682,12 +2025,15 @@ impl Engine {
     /// nodes are not clickable.
     fn hit_test(&self, x: f64, y: f64) -> Option<u32> {
         for n in self.nodes.iter().rev() {
-            if !n.visible || n.locked || !n.contains(x, y) {
+            if !n.visible || n.locked || !self.node_hit(n, x, y) {
                 continue;
             }
             if n.kind == NodeKind::Frame {
-                if let Some(c) =
-                    n.children.iter().rev().find(|c| c.visible && !c.locked && c.contains(x, y))
+                if let Some(c) = n
+                    .children
+                    .iter()
+                    .rev()
+                    .find(|c| c.visible && !c.locked && self.node_hit(c, x, y))
                 {
                     return Some(c.id);
                 }
@@ -1695,6 +2041,21 @@ impl Engine {
             return Some(n.id);
         }
         None
+    }
+
+    /// Box containment for most nodes; paths test against the actual
+    /// outline (with a zoom-aware grab tolerance) so empty bbox corners
+    /// don't swallow clicks.
+    fn node_hit(&self, n: &Node, x: f64, y: f64) -> bool {
+        if n.kind != NodeKind::Path {
+            return n.contains(x, y);
+        }
+        let tol = 4.0 / self.zoom;
+        let inside_box = x >= n.x - tol
+            && x <= n.x + n.w + tol
+            && y >= n.y - tol
+            && y <= n.y + n.h + tol;
+        inside_box && path_hit(n, x, y, tol)
     }
 
     /// Resize handle under a screen-space point, on the selection's joint
@@ -1820,6 +2181,7 @@ impl Engine {
             NodeKind::Ellipse => (format!("Ellipse {count}"), "#d4d4d8"),
             NodeKind::Text => (format!("Text {count}"), "#18181b"),
             NodeKind::Image => (format!("Image {count}"), "#f4f4f5"),
+            NodeKind::Path => (format!("Path {count}"), "#d4d4d8"),
         };
         self.nodes.push(Node {
             id,
@@ -1843,6 +2205,8 @@ impl Engine {
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
+            points: Vec::new(),
+            closed: false,
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -1987,6 +2351,17 @@ fn draw_node(
                 }
             }
         }
+        NodeKind::Path => {
+            if n.points.len() >= 2 {
+                for p in &n.fills {
+                    ctx.set_global_alpha(alpha * p.opacity);
+                    ctx.set_fill_style_str(&p.color);
+                    trace_path(ctx, &n.points, n.closed);
+                    ctx.fill();
+                }
+                stroke_paints(ctx, n, alpha, |ctx| trace_path(ctx, &n.points, n.closed));
+            }
+        }
         NodeKind::Image => {
             // Decoded bitmaps live in a JS-side cache the app fills as
             // assets stream in; until then draw a loading placeholder.
@@ -2063,6 +2438,24 @@ fn stroke_paints(
     }
 }
 
+/// Traces a path node's bezier outline into the current canvas path.
+fn trace_path(ctx: &CanvasRenderingContext2d, points: &[Anchor], closed: bool) {
+    ctx.begin_path();
+    if points.is_empty() {
+        return;
+    }
+    ctx.move_to(points[0].x, points[0].y);
+    let segs = if closed { points.len() } else { points.len() - 1 };
+    for i in 0..segs {
+        let a = &points[i];
+        let b = &points[(i + 1) % points.len()];
+        ctx.bezier_curve_to(a.hx_out, a.hy_out, b.hx_in, b.hy_in, b.x, b.y);
+    }
+    if closed {
+        ctx.close_path();
+    }
+}
+
 fn ellipse_path(ctx: &CanvasRenderingContext2d, n: &Node) {
     ctx.begin_path();
     let _ = ctx.ellipse(n.x + n.w / 2.0, n.y + n.h / 2.0, n.w / 2.0, n.h / 2.0, 0.0, 0.0, TAU);
@@ -2089,6 +2482,31 @@ fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, 
 }
 
 // ----- SVG serialization -----
+
+fn path_d(points: &[Anchor], closed: bool, ox: f64, oy: f64) -> String {
+    if points.is_empty() {
+        return String::new();
+    }
+    let mut d = format!("M {} {}", points[0].x + ox, points[0].y + oy);
+    let segs = if closed { points.len() } else { points.len() - 1 };
+    for i in 0..segs {
+        let a = &points[i];
+        let b = &points[(i + 1) % points.len()];
+        d.push_str(&format!(
+            " C {} {} {} {} {} {}",
+            a.hx_out + ox,
+            a.hy_out + oy,
+            b.hx_in + ox,
+            b.hy_in + oy,
+            b.x + ox,
+            b.y + oy
+        ));
+    }
+    if closed {
+        d.push_str(" Z");
+    }
+    d
+}
 
 fn svg_node(
     n: &Node,
@@ -2174,6 +2592,24 @@ fn svg_node(
                         xml_escape(&n.font_family), n.font_size, xml_escape(&p.color), p.opacity, xml_escape(line)
                     ));
                 }
+            }
+        }
+        NodeKind::Path => {
+            let d = path_d(&n.points, n.closed, ox, oy);
+            for p in &n.fills {
+                out.push_str(&format!(
+                    r#"<path d="{d}" fill="{}" fill-opacity="{}"/>"#,
+                    xml_escape(&p.color),
+                    p.opacity
+                ));
+            }
+            for p in &n.strokes {
+                out.push_str(&format!(
+                    r#"<path d="{d}" fill="none" stroke="{}" stroke-opacity="{}" stroke-width="{}"/>"#,
+                    xml_escape(&p.color),
+                    p.opacity,
+                    n.stroke_weight
+                ));
             }
         }
         NodeKind::Image => {

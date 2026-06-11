@@ -963,3 +963,72 @@ test("chat: messages broadcast live between editors", async ({ page, browser }) 
 
   await ctx2.close();
 });
+
+test("pen tool: open path, smooth anchor, closed triangle, persistence", async ({ page }) => {
+  const id = await openNewDocument(page);
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // Open zig-zag: two corner clicks, then a click-drag (smooth anchor).
+  await page.keyboard.press("p");
+  await clickCanvas(page, 200, 200);
+  await clickCanvas(page, 300, 200);
+  await drag(page, 300, 280, 340, 320);
+  await page.keyboard.press("Enter");
+
+  let s = await sceneOf(page);
+  expect(s.tool).toBe("select");
+  const open = s.nodes[0];
+  expect(open.kind).toBe("path");
+  expect(open.points.length).toBe(3);
+  expect(open.closed).toBe(false);
+  expect(open.fills.length).toBe(0);
+  expect(open.strokes.length).toBe(1);
+  // The drag dragged out mirrored handles on the last anchor.
+  const smooth = open.points[2];
+  expect(smooth.hxOut).not.toBe(smooth.x);
+  expect(smooth.hxIn).toBeCloseTo(2 * smooth.x - smooth.hxOut, 5);
+
+  // The stroke renders where it was drawn: a dark pixel on the first
+  // segment (antialiasing makes exact equality fragile; just "dark").
+  await expect.poll(async () => (await pixelAt(250, 200))[0]).toBeLessThan(160);
+
+  // Closed triangle: clicking the first anchor again closes the path.
+  await page.keyboard.press("p");
+  await clickCanvas(page, 450, 350);
+  await clickCanvas(page, 550, 350);
+  await clickCanvas(page, 500, 430);
+  await clickCanvas(page, 450, 350);
+
+  s = await sceneOf(page);
+  const tri = s.nodes[1];
+  expect(tri.kind).toBe("path");
+  expect(tri.closed).toBe(true);
+  expect(tri.fills.length).toBe(1);
+  // Solid interior pixel: the default #d4d4d8 fill.
+  await expect.poll(() => pixelAt(500, 380)).toEqual([212, 212, 216]);
+
+  // Clicking a stroke segment selects the open path; the empty corner of
+  // its bbox does not.
+  await clickCanvas(page, 250, 200);
+  expect((await sceneOf(page)).selection).toEqual([open.id]);
+  await clickCanvas(page, 210, 260); // inside bbox, far from the curve
+  expect((await sceneOf(page)).selection).toEqual([]);
+
+  // Paths persist through save + reload.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Path 1")).toBeVisible();
+  await expect.poll(async () => (await sceneOf(page)).nodes.length).toBe(2);
+  const reloaded = (await sceneOf(page)).nodes[1];
+  expect(reloaded.closed).toBe(true);
+  expect(reloaded.points.length).toBe(3);
+});
