@@ -2,9 +2,11 @@
 
 - Text: styling text spans by selecting text and styling it, e.g. making a section bold or italic, changing a font, or color, ...
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
-- more complex path operations like outline stroke, or even pathfinder operations like union/subtract/intersect (true curve clipping; flatten already covers the even-odd/exclude look)
+- outline stroke (convert a stroke to a filled path); pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper)
 
 # DONE (things are moved here once they are done)
+
+- Pathfinder: Union / Subtract / Intersect on two selected shapes (right-click or Object menu) — Greiner-Hormann clipping on the flattened outlines, subject = the lower shape in z; results are multi-contour even-odd paths, so punched holes and split pieces both work, and they stay editable with the path tools
 
 - Flatten (⌘E, also in the right-click and Object menus): merges the selected shapes into one multi-contour path filled under the even-odd rule, so overlaps become holes; rounded rects and ellipses convert to proper bezier arcs
 - Frame selection (⌥⌘G): wraps the selection in a new frame sized to its bounding box

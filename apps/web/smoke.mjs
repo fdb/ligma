@@ -775,6 +775,92 @@ assert(s25.selection[0] === fr25.id, "the new frame is selected");
 e25.undo();
 assert(JSON.parse(e25.scene()).nodes.length === 2, "frame selection undoes in one step");
 
+// Pathfinder booleans: union, subtract, intersect on two shapes.
+const mkBool = () => {
+  const en = new Engine();
+  const d = (x1, y1, x2, y2) => {
+    en.set_tool("rect");
+    en.pointer_down(x1, y1, false, false);
+    en.pointer_move(x2, y2);
+    en.pointer_up();
+  };
+  d(100, 100, 300, 300); // bottom shape (subject)
+  d(200, 200, 400, 400); // top shape
+  const ids = JSON.parse(en.scene()).nodes.map((n) => n.id);
+  en.select(ids[0], false);
+  en.select(ids[1], true);
+  return en;
+};
+
+let eb = mkBool();
+eb.boolean_selection("union");
+let sb1 = JSON.parse(eb.scene());
+assert(sb1.nodes.length === 1 && sb1.nodes[0].kind === "path", "union yields one path");
+assert(sb1.nodes[0].inner.length === 0, "union of overlapping rects is a single contour");
+assert(sb1.nodes[0].points.length === 8, "union outline is the L-merge octagon");
+assert(eb.node_at(250, 250) === sb1.nodes[0].id, "union overlap is solid (no hole)");
+assert(eb.node_at(150, 150) === sb1.nodes[0].id, "union keeps the first rect's area");
+assert(eb.node_at(350, 350) === sb1.nodes[0].id, "union keeps the second rect's area");
+assert(sb1.nodes[0].x === 100 && sb1.nodes[0].w === 300, "union bounds span both");
+eb.undo();
+assert(JSON.parse(eb.scene()).nodes.length === 2, "union is one undo step");
+
+eb = mkBool();
+eb.boolean_selection("subtract");
+let sb2 = JSON.parse(eb.scene());
+assert(sb2.nodes.length === 1, "subtract yields one path");
+assert(eb.node_at(150, 150) === sb2.nodes[0].id, "subtract keeps the subject-only area");
+assert(eb.node_at(250, 250) == null, "subtract removes the overlap");
+assert(eb.node_at(350, 350) == null, "subtract drops the top shape's own area");
+assert(sb2.nodes[0].points.length === 6, "rect-minus-rect is an L (6 corners)");
+
+eb = mkBool();
+eb.boolean_selection("intersect");
+let sb3 = JSON.parse(eb.scene());
+assert(sb3.nodes.length === 1, "intersect yields one path");
+assert(eb.node_at(250, 250) === sb3.nodes[0].id, "intersect keeps the overlap");
+assert(eb.node_at(150, 150) == null, "intersect drops subject-only area");
+assert(sb3.nodes[0].x === 200 && sb3.nodes[0].w === 100, "intersect bounds are the overlap");
+
+// Containment special cases: subtract a fully inside shape -> a hole.
+const eh = new Engine();
+const dh = (x1, y1, x2, y2) => {
+  eh.set_tool("rect");
+  eh.pointer_down(x1, y1, false, false);
+  eh.pointer_move(x2, y2);
+  eh.pointer_up();
+};
+dh(100, 100, 400, 400);
+dh(200, 200, 300, 300); // fully inside
+const idsH = JSON.parse(eh.scene()).nodes.map((n) => n.id);
+eh.select(idsH[0], false);
+eh.select(idsH[1], true);
+eh.boolean_selection("subtract");
+const hole = JSON.parse(eh.scene()).nodes[0];
+assert(hole.inner.length === 1, "contained subtract emits a hole contour");
+assert(eh.node_at(250, 250) == null, "punched hole misses");
+assert(eh.node_at(150, 150) === hole.id, "ring area still hits");
+
+// Disjoint union keeps both as contours of one node.
+const ed = new Engine();
+const dd = (x1, y1, x2, y2) => {
+  ed.set_tool("rect");
+  ed.pointer_down(x1, y1, false, false);
+  ed.pointer_move(x2, y2);
+  ed.pointer_up();
+};
+dd(0, 0, 100, 100);
+dd(200, 0, 300, 100);
+const idsD = JSON.parse(ed.scene()).nodes.map((n) => n.id);
+ed.select(idsD[0], false);
+ed.select(idsD[1], true);
+ed.boolean_selection("union");
+const dis = JSON.parse(ed.scene()).nodes[0];
+assert(dis.inner.length === 1, "disjoint union keeps two contours");
+assert(ed.node_at(50, 50) === dis.id && ed.node_at(250, 50) === dis.id, "both pieces hit");
+ed.boolean_selection("union"); // needs exactly 2 selected: no-op
+assert(JSON.parse(ed.scene()).nodes.length === 1, "boolean with one node selected is a no-op");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

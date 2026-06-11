@@ -1130,3 +1130,49 @@ test("flatten merges shapes with even-odd holes; frame selection wraps", async (
   expect(s.nodes[0].w).toBe(300);
   await expect(layers(page).getByText("Frame 1")).toBeVisible();
 });
+
+test("pathfinder: union and subtract from the context menu", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 400, 400);
+  await page.keyboard.press("r");
+  await drag(page, 300, 300, 500, 500);
+  await clickCanvas(page, 250, 250);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 450, 450);
+  await page.keyboard.up("Shift");
+
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + 250, box.y + 250, { button: "right" });
+  await page.getByTestId("context-menu").getByText("Subtract").click();
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // The L remains: subject-only solid, overlap and top-only cut away.
+  let s = await sceneOf(page);
+  expect(s.nodes.length).toBe(1);
+  expect(s.nodes[0].kind).toBe("path");
+  await expect.poll(() => pixelAt(250, 250)).toEqual([212, 212, 216]);
+  await expect.poll(() => pixelAt(350, 350)).toEqual([233, 233, 236]);
+  await expect.poll(() => pixelAt(450, 450)).toEqual([233, 233, 236]);
+
+  // Undo restores both rects; union merges them into one solid.
+  await page.keyboard.press("Meta+z");
+  await expect.poll(async () => (await sceneOf(page)).nodes.length).toBe(2);
+  await clickCanvas(page, 250, 250);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 450, 450);
+  await page.keyboard.up("Shift");
+  await page.mouse.click(box.x + 250, box.y + 250, { button: "right" });
+  await page.getByTestId("context-menu").getByText("Union").click();
+  s = await sceneOf(page);
+  expect(s.nodes.length).toBe(1);
+  await expect.poll(() => pixelAt(350, 350)).toEqual([212, 212, 216]);
+});

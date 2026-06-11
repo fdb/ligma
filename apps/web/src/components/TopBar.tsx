@@ -189,6 +189,22 @@ export function TopBar({
           action: () => engine.flatten_selection(),
         },
         "---",
+        {
+          label: "Union",
+          disabled: scene.selection.length !== 2,
+          action: () => engine.boolean_selection("union"),
+        },
+        {
+          label: "Subtract",
+          disabled: scene.selection.length !== 2,
+          action: () => engine.boolean_selection("subtract"),
+        },
+        {
+          label: "Intersect",
+          disabled: scene.selection.length !== 2,
+          action: () => engine.boolean_selection("intersect"),
+        },
+        "---",
         align("left"),
         align("hcenter"),
         align("right"),
