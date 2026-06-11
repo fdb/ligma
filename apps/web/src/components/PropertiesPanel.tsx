@@ -171,7 +171,7 @@ function PaintRow({
       </button>
     </div>
     {isGradient && (
-      <div className="mb-1.5 flex items-center gap-1.5 pl-8">
+      <div className="mb-1.5 flex items-center gap-1.5">
         {paint.stops.slice(0, 2).map((s, si) => (
           <div
             key={si}
