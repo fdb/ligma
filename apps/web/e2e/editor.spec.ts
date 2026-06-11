@@ -65,6 +65,15 @@ async function expandLayer(page: Page, name: string) {
     .click();
 }
 
+const findKind = (nodes: any[], id: number): string | null => {
+  for (const n of nodes) {
+    if (n.id === id) return n.kind;
+    const k = findKind(n.children, id);
+    if (k) return k;
+  }
+  return null;
+};
+
 const sceneOf = (page: Page) =>
   page.evaluate(() => JSON.parse((window as any).__engine.scene()));
 
@@ -1563,4 +1572,60 @@ test("shift constraints, edge-band resize, and snap-to-frame", async ({ page }) 
       return c.x + c.w === f.x + f.w;
     })
     .toBe(true);
+});
+
+test("double-click deep-selects into groups; next one edits text", async ({ page }) => {
+  await openNewDocument(page);
+  const box = await canvasBox(page);
+
+  // A group of a rect and a text node.
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 350, 300);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 420, 240);
+  await clickCanvas(page, 300, 250);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 440, 250);
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Meta+g");
+  await expect(layers(page).getByText("Group 1")).toBeVisible();
+
+  // Single click selects the group; double-click descends to the rect.
+  await clickCanvas(page, 300, 250);
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return findKind(s.nodes, s.selection[0]);
+    })
+    .toBe("group");
+  await page.mouse.dblclick(box.x + 300, box.y + 250);
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return findKind(s.nodes, s.selection[0]);
+    })
+    .toBe("rect");
+
+  // The deep-selected rect resizes through its own handles.
+  await drag(page, 350, 300, 380, 330); // SE corner of the rect
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      const g = s.nodes.find((n: any) => n.kind === "group");
+      return g.children.find((c: any) => c.kind === "rect").w;
+    })
+    .toBe(130);
+
+  // Double-click on the grouped text first selects it, then opens the
+  // inline editor.
+  await page.mouse.dblclick(box.x + 440, box.y + 250);
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return findKind(s.nodes, s.selection[0]);
+    })
+    .toBe("text");
+  await page.mouse.dblclick(box.x + 440, box.y + 250);
+  await expect(page.getByTestId("text-editor")).toBeVisible();
+  await page.keyboard.press("Escape");
 });

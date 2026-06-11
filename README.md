@@ -82,7 +82,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `⇧`-drag | Constrain: squares/circles while drawing, original proportions while resizing |
 | Edge drag | Grab any side of the selection box to resize one axis (snaps to the parent frame) |
 | Right-click | Context menu (clipboard, z-order, group, lock, hide…) |
-| Double-click | Edit text in place (`⌘B`/`⌘I` style the selection) · rename a frame via its label |
+| Double-click | Enter a group one level (deep select) · edit text in place (`⌘B`/`⌘I` style the selection) · rename a frame via its label |
 | `⇧1` / `⌘0` / `⌘±` | Zoom to fit / 100% / in & out |
 | `C` | Comment mode — click the canvas to pin a comment |
 | `⌘S` | Save now (documents also autosave after edits) |

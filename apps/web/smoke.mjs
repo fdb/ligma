@@ -1195,6 +1195,61 @@ esz.pointer_up();
   assert(c.x + c.w === 400, "resize-drag snaps the edge to the parent frame");
 }
 
+// Deep select: double-click descends one container level per call and
+// the deep-selected child stays the drag target.
+const edp = new Engine();
+const edpDraw = (x, y, x2, y2) => {
+  edp.set_tool("rect");
+  edp.pointer_down(x, y, false, false);
+  edp.pointer_move(x2, y2, false);
+  edp.pointer_up();
+};
+edpDraw(100, 100, 150, 150);
+edpDraw(200, 100, 250, 150);
+{
+  const ids = JSON.parse(edp.scene()).nodes.map((n) => n.id);
+  edp.select(ids[0], false);
+  edp.select(ids[1], true);
+}
+edp.group_selection();
+edpDraw(300, 100, 350, 150);
+{
+  const top = JSON.parse(edp.scene()).nodes;
+  edp.select(top[0].id, false);
+  edp.select(top[1].id, true);
+}
+edp.group_selection();
+edp.set_tool("select");
+edp.pointer_down(120, 120, false, false);
+edp.pointer_up();
+{
+  const outer = JSON.parse(edp.scene()).nodes[0];
+  assert(
+    JSON.parse(edp.scene()).selection[0] === outer.id,
+    "click on nested content selects the outer group",
+  );
+  const inner = outer.children.find((c) => c.kind === "group");
+  assert(edp.deep_select(120, 120) === true, "deep_select descends a level");
+  assert(
+    JSON.parse(edp.scene()).selection[0] === inner.id,
+    "first deep_select picks the inner group",
+  );
+  edp.deep_select(120, 120);
+  assert(
+    JSON.parse(edp.scene()).selection[0] === inner.children[0].id,
+    "second deep_select reaches the leaf",
+  );
+  assert(edp.deep_select(120, 120) === false, "deep_select at a leaf returns false");
+  edp.pointer_down(120, 120, false, false);
+  edp.pointer_move(140, 140, false);
+  edp.pointer_up();
+  const ig = JSON.parse(edp.scene()).nodes[0].children.find((c) => c.kind === "group");
+  assert(
+    ig.children[0].x === 120 && ig.children[1].x === 200,
+    "dragging a deep-selected child moves it alone",
+  );
+}
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

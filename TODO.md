@@ -5,10 +5,11 @@
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
 - pathfinder operations stay non-destructive: they appear as a group, with the source shapes inside, until flattened
-- Double clicking an item in a group should select that item, allowing operations on that (e.g. resizing, editing text, and so on)
 - Custom color picker should also have "document colors" - colors that appear on this document, sorted by most frequently used
 - If a frame is empty dragging inside of a frame drags the frame. if it has one item, dragging inside of it will create a drag selection rectangle to select items of the frame
 # DONE (things are moved here once they are done)
+
+- Deep select: double-clicking an item in a group selects that item (one container level per double-click, Figma-style); the deep-selected child can be resized, moved, and panel-edited directly, and double-clicking a grouped text/path once more opens its editor
 
 - Shift constrains drags: squares/circles while drawing, original proportions while resizing from a corner
 - The sides of the selection box are grab bands — drag any edge to resize that axis alone (with ns/ew cursors); corners keep working as before

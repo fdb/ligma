@@ -282,6 +282,11 @@ fn list_at<'a>(nodes: &'a mut Vec<Node>, path: &[usize]) -> &'a mut Vec<Node> {
     list
 }
 
+/// Whether `id` lives anywhere inside `ancestor`'s subtree.
+fn is_within(root: &[Node], ancestor: u32, id: u32) -> bool {
+    find_node(root, ancestor).is_some_and(|a| find_node(&a.children, id).is_some())
+}
+
 /// The direct parent of a node, if it isn't at the root.
 fn parent_of(nodes: &[Node], id: u32) -> Option<&Node> {
     for n in nodes {
@@ -1744,6 +1749,20 @@ impl Engine {
                         oy: y,
                     };
                 } else if let Some(id) = self.hit_test(x, y).or_else(|| self.frame_label_hit(sx, sy)) {
+                    // A deep-selected child stays the drag target while the
+                    // pointer is over it, instead of popping back out to
+                    // its group.
+                    let id = self
+                        .selection
+                        .iter()
+                        .copied()
+                        .find(|&s| {
+                            s != id
+                                && is_within(&self.nodes, id, s)
+                                && find_node(&self.nodes, s)
+                                    .map_or(false, |n| self.node_hit(n, x, y))
+                        })
+                        .unwrap_or(id);
                     if shift {
                         if let Some(i) = self.selection.iter().position(|&s| s == id) {
                             self.selection.remove(i);
@@ -3314,6 +3333,44 @@ impl Engine {
     pub fn node_at(&self, sx: f64, sy: f64) -> Option<u32> {
         let (x, y) = self.to_world(sx, sy);
         self.hit_test(x, y)
+    }
+
+    /// Double-click "deep select": narrows the selection one container
+    /// level along the hit chain under a screen point (group → child →
+    /// grandchild…, Figma-style). Returns false at a leaf so callers can
+    /// fall through to text or path editing.
+    pub fn deep_select(&mut self, sx: f64, sy: f64) -> bool {
+        let (x, y) = self.to_world(sx, sy);
+        let mut chain: Vec<u32> = Vec::new();
+        let mut list: &[Node] = &self.nodes;
+        loop {
+            let Some(n) = list
+                .iter()
+                .rev()
+                .find(|n| n.visible && !n.locked && self.node_hit(n, x, y))
+            else {
+                break;
+            };
+            chain.push(n.id);
+            if matches!(n.kind, NodeKind::Frame | NodeKind::Component | NodeKind::Group) {
+                list = &n.children;
+            } else {
+                break;
+            }
+        }
+        if chain.is_empty() {
+            return false;
+        }
+        // One level below the deepest currently-selected ancestor; with
+        // no selection on the chain, behave like a plain click.
+        let next = match chain.iter().rposition(|id| self.selection.contains(id)) {
+            Some(i) if i + 1 < chain.len() => chain[i + 1],
+            Some(_) => return false,
+            None => chain[0],
+        };
+        self.selection = vec![next];
+        self.touch();
+        true
     }
 
     pub fn nudge(&mut self, dx: f64, dy: f64) {

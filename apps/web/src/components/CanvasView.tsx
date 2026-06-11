@@ -239,9 +239,14 @@ export function CanvasView({
       setOverlay({ id: labelId, kind: "name" });
       return;
     }
-    // Engine hit test (descends into frame children, skips hidden/locked).
+    // Deep select: enter one container level (group/frame nesting) per
+    // double-click. Only at a leaf do we fall through to editing.
+    if (engine.deep_select(x, y)) return;
+    // node_at stops at group boundaries; after deep-selecting down to a
+    // leaf, the selection IS the node under the cursor, so prefer it.
     const hitId = engine.node_at(x, y);
-    const hit = hitId !== undefined ? findNode(live.nodes, hitId) : null;
+    const sel = live.selection.length === 1 ? findNode(live.nodes, live.selection[0]) : null;
+    const hit = hitId === undefined ? null : (sel ?? findNode(live.nodes, hitId));
     if (hit?.kind === "text") {
       engine.set_editing_node(hit.id);
       setOverlay({ id: hit.id, kind: "text" });
