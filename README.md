@@ -101,6 +101,5 @@ floating session chat relays through the same presence room.
 
 - Pathfinder on 3+ shapes and curve-exact clipping (pairwise
   union/subtract/intersect, flatten, and outline stroke already work)
-- Live styled text editing overlay (per-span bold/italic/color/size/family all work)
 - Component overrides (per-instance text/fill changes; live masters work)
 - Multiplayer co-editing (per-operation sync; presence/saves already live)

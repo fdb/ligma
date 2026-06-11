@@ -1653,6 +1653,34 @@ impl Engine {
         self.touch();
     }
 
+    /// Replaces a text node's content and spans together, as one undo
+    /// step — the styled inline editor commits through this. Hostile
+    /// span payloads (oversized, markup-bearing) are dropped per span.
+    pub fn set_text_styled(&mut self, id: u32, text: &str, spans_json: &str) {
+        let Ok(mut spans) = serde_json::from_str::<Vec<Span>>(spans_json) else {
+            return;
+        };
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.text = text.to_string();
+            let len = n.text.chars().count();
+            spans.retain(|s| {
+                s.len > 0
+                    && s.start < len
+                    && s.color.len() <= 32
+                    && !s.color.contains(['<', '"', ';'])
+                    && s.family.len() <= 64
+                    && !s.family.contains(['<', '"', ';', '\''])
+                    && (s.size == 0.0 || (1.0..=400.0).contains(&s.size))
+            });
+            for s in &mut spans {
+                s.len = s.len.min(len - s.start);
+            }
+            n.spans = spans;
+        }
+        self.touch();
+    }
+
     /// Toggles bold/italic over a char range of a text node. Spans are
     /// rebuilt from a per-char style map, so overlaps merge and split
     /// cleanly no matter how ranges are applied.

@@ -1,9 +1,10 @@
 # TODO / FEATURE WISHLIST
 
-- Show text styling live inside the inline editor overlay (it stays a plain textarea; styled runs appear after commit)
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 
 # DONE (things are moved here once they are done)
+
+- Live styled text editing: the inline editor is now a controlled contenteditable that shows bold/italic/color/size/family while you type — the toolbar styles the live selection, edits splice a local per-char style model (the browser never mutates the DOM itself), and closing the editor commits text + spans to the engine as one undo step
 
 - Rich text, part 3 — per-span font size and family: the floating text toolbar gained a size field and a font dropdown that style the current selection; the engine lays out mixed-metric lines for real (wrap measures every run in its own font, each line's height follows its tallest run, runs share a baseline), spans export as SVG tspans with font-size/font-family, span fonts load from Google Fonts on open, and plain text keeps its exact old layout
 

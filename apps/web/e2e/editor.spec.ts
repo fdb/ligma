@@ -1234,7 +1234,10 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
   await page.mouse.dblclick(box.x + 305, box.y + 300);
   const editor = page.getByTestId("text-editor");
   await editor.waitFor();
-  await editor.evaluate((ta: HTMLTextAreaElement) => ta.setSelectionRange(0, 3));
+  // Select the first 3 chars ("Tex") in the contenteditable.
+  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("ArrowLeft");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("Meta+b");
   await page.keyboard.press("Escape");
 
@@ -1354,9 +1357,17 @@ test("text toolbar: color dots tint the selection", async ({ page }) => {
   const box = await canvasBox(page);
   await page.mouse.dblclick(box.x + 305, box.y + 300);
   await expect(page.getByTestId("text-toolbar")).toBeVisible();
-  const editor = page.getByTestId("text-editor");
-  await editor.evaluate((ta: HTMLTextAreaElement) => ta.setSelectionRange(0, 4));
+  await page.getByTestId("text-editor").waitFor();
+  await page.keyboard.press("Meta+a");
   await page.getByTestId("span-color-ef4444").click();
+  // Styling shows live in the editor before any commit.
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("text-editor")
+        .evaluate((el) => (el.querySelector("span") as HTMLElement)?.style.color),
+    )
+    .toBe("rgb(239, 68, 68)");
   await page.keyboard.press("Escape");
 
   const s = await sceneOf(page);
@@ -1825,31 +1836,33 @@ test("text toolbar sets per-span font size and family", async ({ page }) => {
   await expect(ta).toBeVisible();
   await ta.press("Meta+a");
   const sizeField = page.getByTestId("span-size");
+  await sizeField.click();
   await sizeField.fill("40");
   await sizeField.press("Enter");
-  // The overlay must survive the focus trip through the toolbar.
+  // The overlay must survive the focus trip through the toolbar, and
+  // the styled run shows live at 40px in the editor DOM.
   await expect(ta).toBeVisible();
   await expect
-    .poll(async () => {
-      const s = await sceneOf(page);
-      return s.nodes[0].spans.map((sp: any) => sp.size);
-    })
-    .toEqual([40]);
+    .poll(() => ta.evaluate((el) => (el.querySelector("span") as HTMLElement)?.style.fontSize))
+    .toBe("40px");
 
   // Apply a family to the same selection through the dropdown.
   await ta.press("Meta+a");
   await page.getByTestId("span-family").selectOption("Lora");
   await expect
+    .poll(() => ta.evaluate((el) => (el.querySelector("span") as HTMLElement)?.style.fontFamily))
+    .toContain("Lora");
+
+  // Commit: the engine receives the spans in one step, and the canvas
+  // re-renders the run at 40px — far more ink than the 16px base.
+  await page.keyboard.press("Escape");
+  await expect
     .poll(async () => {
-      const s = await sceneOf(page);
-      const sp = s.nodes[0].spans[0];
-      return [sp.size, sp.family];
+      const sc = await sceneOf(page);
+      const sp = sc.nodes[0].spans[0];
+      return sp ? [sp.size, sp.family] : null;
     })
     .toEqual([40, "Lora"]);
-
-  // Commit; the canvas re-renders the run at 40px: glyphs reach taller
-  // than the node's base 16px line ever did.
-  await page.keyboard.press("Escape");
   const darkCount = (r: { x: number; y: number; w: number; h: number }) =>
     page.evaluate((rr) => {
       const canvas = document.querySelector("canvas")!;
