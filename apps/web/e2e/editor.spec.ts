@@ -1239,14 +1239,14 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
   await page.keyboard.press("Escape");
 
   let s = await sceneOf(page);
-  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 3, bold: true, italic: false, color: "" }]);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 3, bold: true, italic: false, color: "", size: 0, family: "" }]);
   // Bold glyphs carry more ink.
   await expect.poll(darkPixels).toBeGreaterThan(before);
 
   // The panel's B button styles the whole text; clicking again clears.
   await page.getByTestId("text-bold").click();
   s = await sceneOf(page);
-  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 4, bold: true, italic: false, color: "" }]);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 4, bold: true, italic: false, color: "", size: 0, family: "" }]);
   await page.getByTestId("text-bold").click();
   s = await sceneOf(page);
   expect(s.nodes[0].spans).toEqual([]);
@@ -1259,7 +1259,7 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
   await expect(layers(page).getByText("Text 1")).toBeVisible();
   await expect
     .poll(async () => (await sceneOf(page)).nodes[0].spans)
-    .toEqual([{ start: 0, len: 4, bold: false, italic: true, color: "" }]);
+    .toEqual([{ start: 0, len: 4, bold: false, italic: true, color: "", size: 0, family: "" }]);
 });
 
 test("frames clip their children's rendering", async ({ page }) => {
@@ -1361,7 +1361,7 @@ test("text toolbar: color dots tint the selection", async ({ page }) => {
 
   const s = await sceneOf(page);
   expect(s.nodes[0].spans).toEqual([
-    { start: 0, len: 4, bold: false, italic: false, color: "#ef4444" },
+    { start: 0, len: 4, bold: false, italic: false, color: "#ef4444", size: 0, family: "" },
   ]);
 
   // Red ink actually lands on the canvas.
@@ -1807,4 +1807,83 @@ test("outline stroke on an open path renders round caps and joins", async ({ pag
   await expect.poll(() => dark(192, 200)).toBe(true); // round start cap
   await expect.poll(() => dark(180, 200)).toBe(false); // beyond the cap
   await expect.poll(() => dark(340, 280)).toBe(false); // bend interior
+});
+
+test("text toolbar sets per-span font size and family", async ({ page }) => {
+  await openNewDocument(page);
+  await page.evaluate(() => (document as any).fonts.ready);
+  const box = await canvasBox(page);
+
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250);
+  const s0 = await sceneOf(page);
+  const n = s0.nodes[0];
+
+  // Open the editor, select all, bump the size of the selection to 40.
+  await page.mouse.dblclick(box.x + 320, box.y + 255);
+  const ta = page.getByTestId("text-editor");
+  await expect(ta).toBeVisible();
+  await ta.press("Meta+a");
+  const sizeField = page.getByTestId("span-size");
+  await sizeField.fill("40");
+  await sizeField.press("Enter");
+  // The overlay must survive the focus trip through the toolbar.
+  await expect(ta).toBeVisible();
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return s.nodes[0].spans.map((sp: any) => sp.size);
+    })
+    .toEqual([40]);
+
+  // Apply a family to the same selection through the dropdown.
+  await ta.press("Meta+a");
+  await page.getByTestId("span-family").selectOption("Lora");
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      const sp = s.nodes[0].spans[0];
+      return [sp.size, sp.family];
+    })
+    .toEqual([40, "Lora"]);
+
+  // Commit; the canvas re-renders the run at 40px: glyphs reach taller
+  // than the node's base 16px line ever did.
+  await page.keyboard.press("Escape");
+  const darkCount = (r: { x: number; y: number; w: number; h: number }) =>
+    page.evaluate((rr) => {
+      const canvas = document.querySelector("canvas")!;
+      const cr = canvas.getBoundingClientRect();
+      const dpr = canvas.width / cr.width;
+      const d = canvas
+        .getContext("2d")!
+        .getImageData(rr.x * dpr, rr.y * dpr, rr.w * dpr, rr.h * dpr).data;
+      let dark = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 100) dark++;
+      }
+      return dark;
+    }, r);
+  // The 40px block is centered on the node box; sample a tall region
+  // around it and expect far more ink than a 16px line could produce.
+  const region = {
+    x: n.x * s0.zoom + s0.panX - 10,
+    y: n.y * s0.zoom + s0.panY - 30,
+    w: 220,
+    h: 90,
+  };
+  await expect.poll(() => darkCount(region)).toBeGreaterThan(300);
+
+  // Survives reload.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("canvas")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      const sp = s.nodes[0]?.spans?.[0];
+      return sp ? [sp.size, sp.family] : null;
+    })
+    .toEqual([40, "Lora"]);
 });

@@ -116,31 +116,42 @@ pub(crate) fn draw_node(
             stroke_paints(ctx, n, alpha, |ctx| ellipse_path(ctx, n));
         }
         NodeKind::Text => {
-            ctx.set_font(&format!("{}px '{}', sans-serif", n.font_size, n.font_family));
             ctx.set_text_baseline("top");
-            let lh = n.font_size * LINE_HEIGHT;
-            let lines = wrap_text(ctx, &n.text, n.w);
-            let block = lines.len() as f64 * lh;
+            let styles = char_styles(n);
+            let lines = wrap_text_styled(ctx, n, &styles);
+            // Each line's slot is 1.4× its tallest run; runs share an
+            // approximate baseline 0.8em below the tallest run's em top,
+            // which reduces to the old uniform layout exactly when no
+            // size spans exist.
+            let line_offs: Vec<usize> = {
+                let mut offs = Vec::with_capacity(lines.len());
+                let mut off = 0;
+                for line in &lines {
+                    offs.push(off);
+                    off += line.chars().count() + 1; // +1: the break char
+                }
+                offs
+            };
+            let heights: Vec<f64> = lines
+                .iter()
+                .zip(&line_offs)
+                .map(|(line, &off)| line_max_size(n, &styles, line, off) * LINE_HEIGHT)
+                .collect();
+            let block: f64 = heights.iter().sum();
             let y0 = match n.text_valign.as_str() {
                 "top" => n.y,
                 "bottom" => n.y + n.h - block,
                 _ => n.y + (n.h - block) / 2.0,
             };
             layouts.borrow_mut().insert(n.id, lines.clone());
-            let styles = char_styles(n);
-            let mut off = 0;
-            for (i, line) in lines.iter().enumerate() {
-                // Each line slot is lh tall; the em box centers in it so a
-                // single line at "middle" matches the pre-wrap rendering.
-                let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0;
-                // Style runs render with their own font variant; the line
-                // width for alignment sums the styled segment widths.
+            let mut y_cur = y0;
+            for ((line, &off), &lh) in lines.iter().zip(&line_offs).zip(&heights) {
+                let max_size = lh / LINE_HEIGHT;
                 let segs = line_segments(&styles, line, off);
-                off += line.chars().count() + 1; // +1: the break char
                 let widths: Vec<f64> = segs
                     .iter()
-                    .map(|(s, b, it, _)| {
-                        ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
+                    .map(|(s, st)| {
+                        ctx.set_font(&font_spec(st.size_in(n), st.family_in(n), st.bold, st.italic));
                         ctx.measure_text(s).map(|m| m.width()).unwrap_or(0.0)
                     })
                     .collect();
@@ -150,11 +161,14 @@ pub(crate) fn draw_node(
                     "right" => n.x + n.w - total,
                     _ => n.x,
                 };
-                for ((seg, b, it, col), w) in segs.iter().zip(&widths) {
-                    ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
+                for ((seg, st), w) in segs.iter().zip(&widths) {
+                    let size = st.size_in(n);
+                    // Em top so this run's ~0.8em baseline meets the line's.
+                    let ty = y_cur + (lh - max_size) / 2.0 + 0.8 * (max_size - size);
+                    ctx.set_font(&font_spec(size, st.family_in(n), st.bold, st.italic));
                     for p in &n.fills {
                         ctx.set_global_alpha(alpha * p.opacity);
-                        ctx.set_fill_style_str(if col.is_empty() { &p.color } else { col });
+                        ctx.set_fill_style_str(if st.color.is_empty() { &p.color } else { &st.color });
                         let _ = ctx.fill_text(seg, tx, ty);
                     }
                     for p in &n.strokes {
@@ -165,6 +179,7 @@ pub(crate) fn draw_node(
                     }
                     tx += w;
                 }
+                y_cur += lh;
             }
         }
         NodeKind::Path => {
@@ -243,24 +258,45 @@ pub(crate) fn draw_node(
 
 /// Greedy word wrap against real canvas metrics. Explicit newlines are
 /// hard breaks; a word longer than the box gets its own overflowing line.
-pub(crate) fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_w: f64) -> Vec<String> {
+/// Greedy word wrap measuring every run with its own span font, so size
+/// and family overrides reflow the text correctly. Char offsets walk in
+/// lockstep with the node's text (spaces and newlines count).
+pub(crate) fn wrap_text_styled(
+    ctx: &CanvasRenderingContext2d,
+    n: &Node,
+    styles: &[crate::text::CharStyle],
+) -> Vec<String> {
+    let measure = |s: &str, from: usize| -> f64 {
+        let mut w = 0.0;
+        for (seg, st) in line_segments(styles, s, from) {
+            ctx.set_font(&font_spec(st.size_in(n), st.family_in(n), st.bold, st.italic));
+            w += ctx.measure_text(&seg).map(|m| m.width()).unwrap_or(0.0);
+        }
+        w
+    };
     let mut lines = Vec::new();
-    for para in text.split('\n') {
+    let mut off = 0; // char offset of the current paragraph
+    for para in n.text.split('\n') {
         let mut line = String::new();
+        let mut line_off = off;
+        let mut word_off = off;
         for word in para.split(' ') {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let w = ctx.measure_text(&cand).map(|m| m.width()).unwrap_or(0.0);
-            if w <= max_w || line.is_empty() {
+            if measure(&cand, line_off) <= n.w || line.is_empty() {
                 line = cand;
             } else {
                 lines.push(std::mem::take(&mut line));
+                line_off = word_off;
                 line = word.to_string();
             }
+            word_off += word.chars().count() + 1; // +1: the space
         }
         lines.push(line);
+        off += para.chars().count() + 1; // +1: the newline
     }
     lines
 }
+
 
 /// Sets the context fill style for a paint: solid color, or a linear
 /// gradient spanning the node's bounding box at the paint's angle.

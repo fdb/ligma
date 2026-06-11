@@ -1666,9 +1666,9 @@ impl Engine {
             let mut styles = char_styles(n);
             for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
                 if field == "bold" {
-                    c.0 = on;
+                    c.bold = on;
                 } else {
-                    c.1 = on;
+                    c.italic = on;
                 }
             }
             n.spans = run_length_spans(&styles);
@@ -1686,7 +1686,41 @@ impl Engine {
             let chars = n.text.chars().count();
             let mut styles = char_styles(n);
             for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
-                c.2 = color.to_string();
+                c.color = color.to_string();
+            }
+            n.spans = run_length_spans(&styles);
+        }
+        self.touch();
+    }
+
+    /// Sets (or clears, with 0) the font-size override on a char range.
+    pub fn set_span_size(&mut self, id: u32, start: usize, len: usize, size: f64) {
+        if len == 0 || !(size == 0.0 || (1.0..=400.0).contains(&size)) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let chars = n.text.chars().count();
+            let mut styles = char_styles(n);
+            for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
+                c.size = size;
+            }
+            n.spans = run_length_spans(&styles);
+        }
+        self.touch();
+    }
+
+    /// Sets (or clears, with "") the font-family override on a char range.
+    pub fn set_span_family(&mut self, id: u32, start: usize, len: usize, family: &str) {
+        if len == 0 || family.len() > 64 || family.contains(['<', '"', ';', '\'']) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let chars = n.text.chars().count();
+            let mut styles = char_styles(n);
+            for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
+                c.family = family.to_string();
             }
             n.spans = run_length_spans(&styles);
         }

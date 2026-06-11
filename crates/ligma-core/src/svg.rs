@@ -174,8 +174,24 @@ pub(crate) fn svg_node(
             // place real measurement exists); fall back to raw lines.
             let fallback: Vec<String> = n.text.split('\n').map(str::to_string).collect();
             let lines = layouts.get(&n.id).unwrap_or(&fallback);
-            let lh = n.font_size * LINE_HEIGHT;
-            let block = lines.len() as f64 * lh;
+            let styles = char_styles(n);
+            // Per-line slot heights mirror the canvas: 1.4× the tallest
+            // run, runs sharing a ~0.8em baseline.
+            let line_offs: Vec<usize> = {
+                let mut offs = Vec::with_capacity(lines.len());
+                let mut off = 0;
+                for line in lines {
+                    offs.push(off);
+                    off += line.chars().count() + 1;
+                }
+                offs
+            };
+            let heights: Vec<f64> = lines
+                .iter()
+                .zip(&line_offs)
+                .map(|(line, &off)| line_max_size(n, &styles, line, off) * LINE_HEIGHT)
+                .collect();
+            let block: f64 = heights.iter().sum();
             let y0 = match n.text_valign.as_str() {
                 "top" => y,
                 "bottom" => y + n.h - block,
@@ -186,35 +202,46 @@ pub(crate) fn svg_node(
                 "right" => ("end", x + n.w),
                 _ => ("start", x),
             };
-            let styles = char_styles(n);
             for p in &n.fills {
-                let mut off = 0;
-                for (i, line) in lines.iter().enumerate() {
-                    // Baseline approximation: ~0.8em below the em top.
-                    let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0 + n.font_size * 0.8;
+                let mut y_cur = y0;
+                for ((line, &off), &lh) in lines.iter().zip(&line_offs).zip(&heights) {
+                    let max_size = lh / LINE_HEIGHT;
+                    let ty = y_cur + (lh - max_size) / 2.0 + max_size * 0.8;
                     let mut body = String::new();
-                    for (seg, b, it, col) in line_segments(&styles, line, off) {
-                        if b || it || !col.is_empty() {
-                            let fill = if col.is_empty() {
-                                String::new()
-                            } else {
-                                format!(r#" fill="{}""#, xml_escape(&col))
-                            };
+                    for (seg, st) in line_segments(&styles, line, off) {
+                        if st.is_plain() {
+                            body.push_str(&xml_escape(&seg));
+                        } else {
+                            let mut attrs = String::new();
+                            if st.bold {
+                                attrs.push_str(r#" font-weight="700""#);
+                            }
+                            if st.italic {
+                                attrs.push_str(r#" font-style="italic""#);
+                            }
+                            if !st.color.is_empty() {
+                                attrs.push_str(&format!(r#" fill="{}""#, xml_escape(&st.color)));
+                            }
+                            if st.size > 0.0 {
+                                attrs.push_str(&format!(r#" font-size="{}""#, st.size));
+                            }
+                            if !st.family.is_empty() {
+                                attrs.push_str(&format!(
+                                    r#" font-family="{}, sans-serif""#,
+                                    xml_escape(&st.family)
+                                ));
+                            }
                             body.push_str(&format!(
-                                r#"<tspan{}{}{fill}>{}</tspan>"#,
-                                if b { r#" font-weight="700""# } else { "" },
-                                if it { r#" font-style="italic""# } else { "" },
+                                r#"<tspan{attrs}>{}</tspan>"#,
                                 xml_escape(&seg)
                             ));
-                        } else {
-                            body.push_str(&xml_escape(&seg));
                         }
                     }
-                    off += line.chars().count() + 1;
                     out.push_str(&format!(
                         r#"<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{}, sans-serif" font-size="{}" fill="{}" fill-opacity="{}">{}</text>"#,
                         xml_escape(&n.font_family), n.font_size, xml_escape(&p.color), p.opacity, body
                     ));
+                    y_cur += lh;
                 }
             }
         }

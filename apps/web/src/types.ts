@@ -67,7 +67,17 @@ export interface SceneNode {
   /** Extra closed contours, filled with `points` under the even-odd rule. */
   inner: PathAnchor[][];
   /** Styled runs in `text` (char offsets; text nodes only). */
-  spans: { start: number; len: number; bold: boolean; italic: boolean; color: string }[];
+  spans: {
+    start: number;
+    len: number;
+    bold: boolean;
+    italic: boolean;
+    color: string;
+    /** Font size override; 0 = the node's own size. */
+    size: number;
+    /** Font family override; "" = the node's own family. */
+    family: string;
+  }[];
   /** Master component id (instance nodes only). */
   component: number;
   /** Boolean operation (bool nodes only): "union" | "subtract" | "intersect". */

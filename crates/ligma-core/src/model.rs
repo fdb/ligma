@@ -50,6 +50,12 @@ pub struct Span {
     /// Fill override for the run; empty = the node's own fill color.
     #[serde(default)]
     pub color: String,
+    /// Font size override; 0 = the node's own font size.
+    #[serde(default)]
+    pub size: f64,
+    /// Font family override; empty = the node's own family.
+    #[serde(default)]
+    pub family: String,
 }
 
 /// A gradient color stop at a 0..1 position along the gradient axis.

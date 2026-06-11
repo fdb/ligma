@@ -1,9 +1,11 @@
 # TODO / FEATURE WISHLIST
 
-- Text spans: per-span font family and size (bold/italic/color shipped); show styling live inside the inline editor overlay
+- Show text styling live inside the inline editor overlay (it stays a plain textarea; styled runs appear after commit)
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 
 # DONE (things are moved here once they are done)
+
+- Rich text, part 3 — per-span font size and family: the floating text toolbar gained a size field and a font dropdown that style the current selection; the engine lays out mixed-metric lines for real (wrap measures every run in its own font, each line's height follows its tallest run, runs share a baseline), spans export as SVG tspans with font-size/font-family, span fonts load from Google Fonts on open, and plain text keeps its exact old layout
 
 - Outline stroke on open paths: an open pen path's stroke converts to a capsule-union outline — round joins at every bend and round caps at both ends (closed outlines keep their mitered rings)
 

@@ -41,7 +41,10 @@ export function ensureFont(family: string) {
 export function ensureSceneFonts(scene: Scene) {
   const walk = (nodes: Scene["nodes"]) => {
     for (const n of nodes) {
-      if (n.kind === "text") ensureFont(n.fontFamily);
+      if (n.kind === "text") {
+        ensureFont(n.fontFamily);
+        for (const s of n.spans) if (s.family) ensureFont(s.family);
+      }
       walk(n.children);
     }
   };

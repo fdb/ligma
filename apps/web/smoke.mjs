@@ -1113,6 +1113,44 @@ assert(!spc.some((s) => s.color === "#ff0000"), "empty color clears the override
 es.set_span_color(tid, 0, 5, 'red";<evil');
 assert(!JSON.parse(es.scene()).nodes[0].spans.some((s) => s.color.includes("<")), "hostile colors rejected");
 
+// Per-span font size and family.
+const esf = new Engine();
+esf.set_tool("text");
+esf.pointer_down(50, 50, false, false);
+esf.pointer_up();
+{
+  const tid = JSON.parse(esf.scene()).nodes[0].id;
+  esf.set_text(tid, "Hello world");
+  esf.set_span_size(tid, 0, 5, 32);
+  esf.set_span_family(tid, 6, 5, "Lora");
+  const spans = JSON.parse(esf.scene()).nodes[0].spans;
+  assert(
+    spans.length === 2 && spans[0].size === 32 && spans[1].family === "Lora",
+    "span size and family apply to char ranges",
+  );
+  const svg = esf.export_svg(tid);
+  assert(
+    svg.includes('font-size="32"') && svg.includes('font-family="Lora, sans-serif"'),
+    "SVG tspans carry size and family overrides",
+  );
+  esf.set_span_size(tid, 0, 5, 0);
+  assert(
+    JSON.parse(esf.scene()).nodes[0].spans.length === 1,
+    "size 0 clears the override and the span dissolves",
+  );
+  esf.set_span_family(tid, 0, 5, 'Ev"il<x');
+  assert(
+    JSON.parse(esf.scene()).nodes[0].spans.length === 1,
+    "hostile family strings are rejected",
+  );
+  const e2f = new Engine();
+  e2f.load_json(esf.to_json());
+  assert(
+    JSON.parse(e2f.scene()).nodes[0].spans[0].family === "Lora",
+    "span size/family round-trip through JSON",
+  );
+}
+
 // Frame clipping: SVG wraps children in a clipPath; overhang is
 // unreachable by hit-testing (it falls outside the frame).
 const ef = new Engine();

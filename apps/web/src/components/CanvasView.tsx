@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import { fontMetrics, wrapLines } from "../lib/fontMetrics";
+import { ensureFont, FONT_FAMILIES } from "../lib/fonts";
 import { placementSize, uploadImage } from "../lib/images";
 import type { Peer } from "../lib/usePresence";
 import type { CommentRow } from "../lib/useComments";
@@ -563,6 +564,11 @@ export function CanvasView({
             engine.set_span_style(overlayNode.id, start, end - start, field, !allOn);
           };
           const SPAN_COLORS = ["#18181b", "#ef4444", "#f59e0b", "#22c55e", "#0ea5e9", ""];
+          const refocusEditor = () => {
+            document
+              .querySelector<HTMLTextAreaElement>('[data-testid="text-editor"]')
+              ?.focus();
+          };
           return (
             <>
             <div
@@ -605,6 +611,56 @@ export function CanvasView({
                   />
                 </button>
               ))}
+              <span className="mx-0.5 h-4 w-px bg-zinc-200" />
+              {/* Size + family act on the selection; they take focus, so
+                  the textarea's blur handler spares toolbar targets. */}
+              <input
+                data-testid="span-size"
+                type="number"
+                min={1}
+                max={400}
+                placeholder={String(overlayNode.fontSize)}
+                title="Font size for the selection (empty resets)"
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key !== "Enter") return;
+                  // Without preventDefault the Enter keypress would land
+                  // in the refocused textarea and replace the selection
+                  // with a newline.
+                  e.preventDefault();
+                  const v = parseFloat(e.currentTarget.value);
+                  styleSelection((id, start, len) =>
+                    engine.set_span_size(id, start, len, Number.isFinite(v) ? v : 0),
+                  );
+                  refocusEditor();
+                }}
+                className="h-6 w-12 rounded bg-zinc-100 px-1.5 text-[11px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+              />
+              <select
+                data-testid="span-family"
+                title="Font family for the selection"
+                defaultValue=""
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  const family = e.currentTarget.value;
+                  if (family) ensureFont(family);
+                  styleSelection((id, start, len) =>
+                    engine.set_span_family(id, start, len, family),
+                  );
+                  e.currentTarget.value = "";
+                  refocusEditor();
+                }}
+                className="h-6 w-24 rounded bg-zinc-100 px-1 text-[11px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+              >
+                <option value="">Font…</option>
+                {FONT_FAMILIES.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
             </div>
             <textarea
               autoFocus
@@ -612,6 +668,11 @@ export function CanvasView({
               defaultValue={overlayNode.text}
               onFocus={(e) => e.currentTarget.select()}
               onBlur={(e) => {
+                // Focus moving into the toolbar (size field, font select)
+                // is part of editing — keep the overlay open; the
+                // textarea's selection range survives the blur.
+                const to = e.relatedTarget as HTMLElement | null;
+                if (to && to.closest('[data-testid="text-toolbar"]')) return;
                 engine.set_text(overlayNode.id, e.currentTarget.value);
                 closeOverlay();
               }}
