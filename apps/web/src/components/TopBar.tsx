@@ -204,6 +204,11 @@ export function TopBar({
           disabled: scene.selection.length !== 2,
           action: () => engine.boolean_selection("intersect"),
         },
+        {
+          label: "Outline stroke",
+          disabled: scene.selection.length === 0,
+          action: () => engine.outline_stroke(),
+        },
         "---",
         align("left"),
         align("hcenter"),

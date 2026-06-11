@@ -875,6 +875,38 @@ fn polygon_clip(pa: &[(f64, f64)], pb: &[(f64, f64)], op: u8) -> Vec<Vec<(f64, f
     result
 }
 
+/// Offsets a closed CCW polygon outward by `d` (inward for negative d)
+/// with mitered joins, beveling spikes whose miter would run away.
+fn offset_polygon(poly: &[(f64, f64)], d: f64) -> Vec<(f64, f64)> {
+    let n = poly.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let p = poly[(i + n - 1) % n];
+        let c = poly[i];
+        let q = poly[(i + 1) % n];
+        // Unit normals of the two edges meeting at c (left-hand normals;
+        // for shoelace-positive rings in screen space these point outward).
+        let norm = |a: (f64, f64), b: (f64, f64)| -> (f64, f64) {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len = dx.hypot(dy).max(1e-12);
+            (dy / len, -dx / len)
+        };
+        let n1 = norm(p, c);
+        let n2 = norm(c, q);
+        let (mx, my) = (n1.0 + n2.0, n1.1 + n2.1);
+        let dot = 1.0 + (n1.0 * n2.0 + n1.1 * n2.1);
+        if dot < 0.25 {
+            // Sharp spike: bevel with both edge-offset endpoints.
+            out.push((c.0 + n1.0 * d, c.1 + n1.1 * d));
+            out.push((c.0 + n2.0 * d, c.1 + n2.1 * d));
+        } else {
+            let scale = d / dot;
+            out.push((c.0 + mx * scale, c.1 + my * scale));
+        }
+    }
+    out
+}
+
 /// An in-progress pen path. Lives outside the document until committed,
 /// so undo treats the whole path as one step.
 struct PenState {
@@ -2434,6 +2466,97 @@ impl Engine {
         dissolve_empty_groups(&mut self.nodes);
         recompute_group_bounds(&mut self.nodes);
         self.selection = vec![id];
+        self.path_edit = None;
+        self.touch();
+    }
+
+    /// Converts each selected shape's stroke into a filled ring path
+    /// (outer + inner offset contours under the even-odd rule). The new
+    /// path is filled with the first stroke paint; the body fill is gone.
+    pub fn outline_stroke(&mut self) {
+        // Collect convertible nodes first: stroked closed outlines.
+        let mut jobs: Vec<(u32, Vec<(f64, f64)>, Paint, f64, Node)> = Vec::new();
+        for &id in &self.selection {
+            let Some(n) = find_node(&self.nodes, id) else {
+                continue;
+            };
+            if n.strokes.is_empty() || n.stroke_weight <= 0.0 {
+                continue;
+            }
+            let mut contours = Vec::new();
+            collect_contours(n, &mut contours);
+            let Some(first) = contours.into_iter().find(|c| c.len() >= 2) else {
+                continue;
+            };
+            let mut poly = simplify_polygon(&flatten_path(&first, true));
+            if poly.len() < 3 {
+                continue;
+            }
+            if signed_area(&poly) < 0.0 {
+                poly.reverse();
+            }
+            jobs.push((id, poly, n.strokes[0].clone(), n.stroke_weight, n.clone()));
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        self.snapshot_now();
+        let mut new_sel = Vec::new();
+        for (id, poly, paint, weight, style) in jobs {
+            let outer = offset_polygon(&poly, weight / 2.0);
+            let inner = offset_polygon(&poly, -weight / 2.0);
+            let to_anchors = |c: &[(f64, f64)]| -> Vec<Anchor> {
+                c.iter().map(|&(x, y)| corner_anchor(x, y)).collect()
+            };
+            let nid = self.next_id;
+            self.next_id += 1;
+            let mut node = Node {
+                id: nid,
+                name: format!("{} (stroke)", style.name),
+                kind: NodeKind::Path,
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+                visible: style.visible,
+                locked: false,
+                fills: vec![paint],
+                strokes: Vec::new(),
+                stroke_weight: 0.0,
+                opacity: style.opacity,
+                blend_mode: style.blend_mode.clone(),
+                corner_radius: 0.0,
+                text: String::new(),
+                font_size: 16.0,
+                font_family: default_font_family(),
+                text_align: default_text_align(),
+                text_valign: default_text_valign(),
+                image: String::new(),
+                points: to_anchors(&outer),
+                closed: true,
+                inner: vec![to_anchors(&inner)],
+                export_presets: Vec::new(),
+                children: Vec::new(),
+            };
+            sync_path_bounds(&mut node);
+            if let Some(p) = path_to(&self.nodes, id) {
+                let i = *p.last().unwrap();
+                let list = list_at(&mut self.nodes, &p);
+                if style.fills.is_empty() {
+                    // Stroke-only shape: the ring replaces it.
+                    list.remove(i);
+                    list.insert(i.min(list.len()), node);
+                } else {
+                    // Keep the filled body underneath; the ring sits on top.
+                    list[i].strokes.clear();
+                    list.insert(i + 1, node);
+                }
+                new_sel.push(nid);
+            }
+        }
+        dissolve_empty_groups(&mut self.nodes);
+        recompute_group_bounds(&mut self.nodes);
+        self.selection = new_sel;
         self.path_edit = None;
         self.touch();
     }

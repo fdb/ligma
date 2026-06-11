@@ -861,6 +861,43 @@ assert(ed.node_at(50, 50) === dis.id && ed.node_at(250, 50) === dis.id, "both pi
 ed.boolean_selection("union"); // needs exactly 2 selected: no-op
 assert(JSON.parse(ed.scene()).nodes.length === 1, "boolean with one node selected is a no-op");
 
+// Outline stroke: a stroked rect becomes a ring path (even-odd).
+const eo = new Engine();
+eo.set_tool("rect");
+eo.pointer_down(100, 100, false, false);
+eo.pointer_move(300, 300);
+eo.pointer_up();
+const oid = JSON.parse(eo.scene()).nodes[0].id;
+eo.add_paint(oid, "strokes");
+eo.set_field(oid, "strokeWeight", 20);
+eo.outline_stroke();
+let so = JSON.parse(eo.scene());
+assert(so.nodes.length === 2, "filled shape keeps its body under the ring");
+const ring = so.nodes[1];
+assert(ring.kind === "path" && ring.inner.length === 1, "ring is a two-contour path");
+assert(ring.fills.length === 1 && ring.strokes.length === 0, "ring is fill-only");
+assert(so.nodes[0].strokes.length === 0, "body loses its stroke");
+assert(ring.x === 90 && ring.w === 220, "outer contour offsets by half the weight");
+// Ring hit-test: band hits, center (between inner offsets) misses the ring.
+assert(eo.node_at(100, 200) === ring.id, "stroke band hits the ring");
+assert(eo.node_at(200, 200) === so.nodes[0].id, "ring center falls through to the body");
+eo.undo();
+assert(JSON.parse(eo.scene()).nodes.length === 1, "outline stroke is one undo step");
+
+// Stroke-only shape: the ring replaces it.
+const eo2 = new Engine();
+eo2.set_tool("rect");
+eo2.pointer_down(0, 0, false, false);
+eo2.pointer_move(100, 100);
+eo2.pointer_up();
+const oid2 = JSON.parse(eo2.scene()).nodes[0].id;
+eo2.add_paint(oid2, "strokes");
+eo2.remove_paint(oid2, "fills", 0);
+eo2.outline_stroke();
+const so2 = JSON.parse(eo2.scene());
+assert(so2.nodes.length === 1 && so2.nodes[0].kind === "path", "stroke-only shape is replaced");
+assert(so2.nodes[0].inner.length === 1, "replacement is a ring");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

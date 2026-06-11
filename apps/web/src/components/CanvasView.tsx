@@ -333,6 +333,11 @@ export function CanvasView({
         disabled: sel.length !== 2,
         action: () => engine.boolean_selection("intersect"),
       },
+      {
+        label: "Outline stroke",
+        disabled: !some,
+        action: () => engine.outline_stroke(),
+      },
       "---",
       {
         label: first?.visible === false ? "Show" : "Hide",
