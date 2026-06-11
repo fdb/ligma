@@ -220,7 +220,10 @@ assert(s7.nodes.length === 1 && s7.nodes[0].kind === "frame", "shape drawn in a 
 assert(s7.nodes[0].children.length === 1 && s7.nodes[0].children[0].kind === "rect", "frame adopts the new shape");
 const childId = s7.nodes[0].children[0].id;
 assert(e7.node_at(100, 100) === childId, "hit test descends into frame children");
-assert(e7.node_at(300, 250) === s7.nodes[0].id, "frame body is hit where no child sits");
+assert(
+  e7.node_at(300, 250) === undefined,
+  "a non-empty frame's body is click-transparent",
+);
 e7.set_tool("rect");
 e7.pointer_down(600, 600, false, false);
 e7.pointer_move(700, 700, false, false);
@@ -1489,10 +1492,11 @@ ef9.pointer_up();
 ef9.pointer_down(120, 280, false, false); // frame body, off the children
 ef9.pointer_up();
 assert(
-  JSON.parse(ef9.scene()).selection[0] === JSON.parse(ef9.scene()).nodes[0].id,
-  "a plain click on the frame body still selects the frame",
+  JSON.parse(ef9.scene()).selection.length === 0,
+  "clicking a non-empty frame's body selects nothing",
 );
-ef9.pointer_down(120, 280, false, false); // now selected: drag moves it
+ef9.select(JSON.parse(ef9.scene()).nodes[0].id, false);
+ef9.pointer_down(120, 280, false, false); // selected: drag moves it
 ef9.pointer_move(130, 290, false);
 ef9.pointer_up();
 assert(
@@ -1533,6 +1537,41 @@ ec9.pointer_up();
   ec9.update_paint(ids9[1], "fills", 0, "#ff0000", 1);
   const colors = JSON.parse(ec9.document_colors());
   assert(colors[0] === "#ff0000", "document_colors sorts by frequency");
+}
+
+// Panel X/Y are relative to the parent container; storage stays absolute.
+const erel = new Engine();
+erel.set_tool("frame");
+erel.pointer_down(100, 100, false, false);
+erel.pointer_move(400, 400, false);
+erel.pointer_up();
+erel.set_tool("rect");
+erel.pointer_down(150, 150, false, false);
+{
+  // Parenting happens at pointer-down, before the drag ends.
+  const live = JSON.parse(erel.scene());
+  assert(
+    live.nodes.length === 1 && live.nodes[0].children.length === 1,
+    "a shape drawn in a frame is parented at pointer-down",
+  );
+}
+erel.pointer_move(200, 200, false);
+erel.pointer_up();
+{
+  const f = JSON.parse(erel.scene()).nodes[0];
+  const c = f.children[0];
+  erel.set_field(c.id, "x", 0);
+  erel.set_field(c.id, "y", 0);
+  const f2 = JSON.parse(erel.scene()).nodes[0];
+  assert(
+    f2.children[0].x === f2.x && f2.children[0].y === f2.y,
+    "X=0/Y=0 places a frame child at the frame's top-left",
+  );
+  const svg = erel.export_svg(f2.id);
+  assert(
+    svg.includes('<rect x="0" y="0"'),
+    "frame SVG export uses frame-relative coordinates",
+  );
 }
 
 // Camera.

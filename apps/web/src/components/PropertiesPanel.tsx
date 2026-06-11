@@ -376,13 +376,26 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
   const n = selected[0];
   const common = { engine, nodeId: n.id };
   const isGroup = n.kind === "group";
+  // X/Y display and edits are relative to the direct parent container
+  // (the engine stores absolute world coordinates).
+  const parentOf = (nodes: SceneNode[], id: number): SceneNode | null => {
+    for (const p of nodes) {
+      if (p.children.some((c) => c.id === id)) return p;
+      const found = parentOf(p.children, id);
+      if (found) return found;
+    }
+    return null;
+  };
+  const parent = parentOf(scene.nodes, n.id);
+  const ox = parent?.x ?? 0;
+  const oy = parent?.y ?? 0;
 
   return (
     <aside className="w-60 shrink-0 overflow-y-auto border-l border-zinc-200 bg-white">
       <Section title={n.name}>
         <div className="grid grid-cols-2 gap-2">
-          <NumberField label="X" title="X position" value={n.x} field="x" {...common} />
-          <NumberField label="Y" title="Y position" value={n.y} field="y" {...common} />
+          <NumberField label="X" title="X position" value={n.x - ox} field="x" {...common} />
+          <NumberField label="Y" title="Y position" value={n.y - oy} field="y" {...common} />
           <NumberField label="W" title="Width" value={n.w} field="w" min={1} {...common} />
           <NumberField label="H" title="Height" value={n.h} field="h" min={1} {...common} />
         </div>

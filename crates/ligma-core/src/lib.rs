@@ -868,23 +868,6 @@ impl Engine {
                                     .map_or(false, |n| self.node_hit(n, x, y))
                         })
                         .unwrap_or(id);
-                    // Dragging the interior of an unselected, non-empty
-                    // frame draws a marquee over its children instead of
-                    // moving the frame — a plain click still selects it,
-                    // and the label stays a drag handle.
-                    if !shift && !alt && !self.selection.contains(&id) {
-                        let frame_body = find_node(&self.nodes, id).is_some_and(|f| {
-                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
-                                && !f.children.is_empty()
-                        }) && self.hit_test(x, y) == Some(id);
-                        if frame_body {
-                            self.selection.clear();
-                            self.drag =
-                                Drag::Marquee { ox: x, oy: y, cx: x, cy: y, scope: id };
-                            self.touch();
-                            return;
-                        }
-                    }
                     if shift {
                         if let Some(i) = self.selection.iter().position(|&s| s == id) {
                             self.selection.remove(i);
@@ -925,10 +908,54 @@ impl Engine {
                         pressed: if shift { 0 } else { id },
                     };
                 } else {
+                    // A non-empty frame's body is click-transparent, but a
+                    // frame that is ALREADY selected still drags by it.
+                    let dragging_selected = !shift
+                        && !alt
+                        && self.selection.iter().any(|&sid| {
+                            find_node(&self.nodes, sid).is_some_and(|n| {
+                                matches!(n.kind, NodeKind::Frame | NodeKind::Component)
+                                    && n.contains(x, y)
+                            })
+                        });
+                    if dragging_selected {
+                        self.begin_mutation();
+                        let starts = self
+                            .selection
+                            .iter()
+                            .filter_map(|&sid| {
+                                find_node(&self.nodes, sid).map(|n| (sid, n.x, n.y))
+                            })
+                            .collect();
+                        self.drag = Drag::Move {
+                            starts,
+                            ox: x,
+                            oy: y,
+                            moved: false,
+                            alt_copied: false,
+                            pressed: 0,
+                        };
+                        self.touch();
+                        return;
+                    }
                     if !shift {
                         self.selection.clear();
                     }
-                    self.drag = Drag::Marquee { ox: x, oy: y, cx: x, cy: y, scope: 0 };
+                    // Inside a non-empty frame's body the rubber band
+                    // scopes to that frame's children.
+                    let scope = self
+                        .nodes
+                        .iter()
+                        .rev()
+                        .find(|f| {
+                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
+                                && !f.children.is_empty()
+                                && f.visible
+                                && !f.locked
+                                && f.contains(x, y)
+                        })
+                        .map_or(0, |f| f.id);
+                    self.drag = Drag::Marquee { ox: x, oy: y, cx: x, cy: y, scope };
                 }
                 self.touch();
             }
@@ -969,6 +996,32 @@ impl Engine {
                     _ => NodeKind::Rect,
                 };
                 let id = self.add_node(kind, x, y, 0.0, 0.0);
+                // Drawing that starts inside a frame parents the shape
+                // immediately (children keep absolute coordinates), so the
+                // outliner shows it in place from the first drag frame
+                // instead of snapping it inside at pointer-up.
+                if kind != NodeKind::Frame {
+                    let target = self
+                        .nodes
+                        .iter()
+                        .rev()
+                        .find(|f| {
+                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
+                                && f.id != id
+                                && f.visible
+                                && !f.locked
+                                && f.contains(x, y)
+                        })
+                        .map(|f| f.id);
+                    if let Some(fid) = target {
+                        if let Some(pos) = self.nodes.iter().position(|n| n.id == id) {
+                            let node = self.nodes.remove(pos);
+                            if let Some(f) = find_node_mut(&mut self.nodes, fid) {
+                                f.children.push(node);
+                            }
+                        }
+                    }
+                }
                 self.selection = vec![id];
                 self.drag = Drag::Draw { id, ox: x, oy: y };
                 self.touch();
@@ -1207,33 +1260,8 @@ impl Engine {
                     }
                     round_subtree(n);
                 }
-                // Drawing inside a frame parents the new shape to it
-                // (children keep absolute coordinates, so no translation).
-                let center = find_node(&self.nodes, id)
-                    .filter(|n| n.kind != NodeKind::Frame)
-                    .map(|n| (n.x + n.w / 2.0, n.y + n.h / 2.0));
-                if let Some((cx, cy)) = center {
-                    let target = self
-                        .nodes
-                        .iter()
-                        .rev()
-                        .find(|f| {
-                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
-                                && f.id != id
-                                && f.visible
-                                && !f.locked
-                                && f.contains(cx, cy)
-                        })
-                        .map(|f| f.id);
-                    if let Some(fid) = target {
-                        if let Some(pos) = self.nodes.iter().position(|n| n.id == id) {
-                            let node = self.nodes.remove(pos);
-                            if let Some(f) = find_node_mut(&mut self.nodes, fid) {
-                                f.children.push(node);
-                            }
-                        }
-                    }
-                }
+                // (Frame parenting happened at pointer-down, so the
+                // outliner never shows the shape at the top level.)
                 self.commit_mutation();
                 self.tool = Tool::Select;
             }
@@ -1273,14 +1301,8 @@ impl Engine {
                 recompute_group_bounds(&mut self.nodes);
                 self.commit_mutation();
             }
-            Drag::Marquee { ox, oy, cx, cy, scope } => {
+            Drag::Marquee { .. } => {
                 self.pending_undo = None;
-                // A click (no real drag) on a non-empty frame's body
-                // selects the frame itself.
-                let tol = 3.0 / self.zoom;
-                if scope != 0 && (cx - ox).abs() < tol && (cy - oy).abs() < tol {
-                    self.selection = vec![scope];
-                }
             }
             _ => {
                 self.pending_undo = None;
@@ -1404,15 +1426,18 @@ impl Engine {
     }
 
     fn apply_field(&mut self, id: u32, field: &str, value: f64) {
+        // Panel X/Y are relative to the direct parent container (Figma
+        // semantics); geometry stays absolute world space internally.
+        let (px, py) = parent_of(&self.nodes, id).map_or((0.0, 0.0), |p| (p.x, p.y));
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             match field {
                 // Moving a group moves its subtree; its size is derived.
                 "x" => {
-                    let dx = value - n.x;
+                    let dx = px + value - n.x;
                     shift_subtree(n, dx, 0.0);
                 }
                 "y" => {
-                    let dy = value - n.y;
+                    let dy = py + value - n.y;
                     shift_subtree(n, 0.0, dy);
                 }
                 // Resizing scales the whole subtree about the box's
@@ -2962,6 +2987,11 @@ impl Engine {
                     .find(|c| c.visible && !c.locked && self.node_hit(c, x, y))
                 {
                     return Some(c.id);
+                }
+                // A non-empty frame's body is click-transparent: only its
+                // children, its label, or an empty frame hit directly.
+                if !n.children.is_empty() {
+                    continue;
                 }
             }
             return Some(n.id);

@@ -1688,14 +1688,14 @@ test("frame-interior drag marquees children; document colors fill the picker", a
     })
     .toEqual([true, 2]);
 
-  // A plain click on the body still selects the frame.
+  // A plain click on a non-empty frame's body selects nothing — the
+  // frame is reachable through its label or the outliner instead.
   await clickCanvas(page, 170, 400);
+  await expect.poll(async () => (await sceneOf(page)).selection.length).toBe(0);
+  // Hovering the body highlights nothing either (engine hit returns null).
   await expect
-    .poll(async () => {
-      const s = await sceneOf(page);
-      return findKind(s.nodes, s.selection[0]);
-    })
-    .toBe("frame");
+    .poll(async () => (await sceneOf(page)).hovered)
+    .toBe(null);
 
   // A click on one of the marquee'd children narrows the selection
   // to it (Figma behavior), so the panel shows its fills.
@@ -1899,4 +1899,49 @@ test("text toolbar sets per-span font size and family", async ({ page }) => {
       return sp ? [sp.size, sp.family] : null;
     })
     .toEqual([40, "Lora"]);
+});
+
+test("frame children use parent-relative X/Y in the panel and SVG", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 500, 400);
+  await page.keyboard.press("r");
+  await drag(page, 300, 250, 360, 310);
+
+  // The panel shows coordinates relative to the frame (drawn at +100,+100).
+  const xField = page.locator("label", { hasText: "X" }).locator("input");
+  const yField = page.locator("label", { hasText: "Y" }).locator("input");
+  await expect(xField).toHaveValue("100");
+  await expect(yField).toHaveValue("100");
+
+  // Typing 0/0 moves the rect to the frame's top-left corner.
+  await xField.fill("0");
+  await xField.press("Enter");
+  await yField.fill("0");
+  await yField.press("Enter");
+  await expect
+    .poll(async () => {
+      const f = (await sceneOf(page)).nodes[0];
+      return [f.children[0].x - f.x, f.children[0].y - f.y];
+    })
+    .toEqual([0, 0]);
+
+  // SVG export of the frame writes the child at x=0 y=0.
+  await layers(page).getByText("Frame 1").click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByText("Copy as SVG").click();
+  const svg = await page.evaluate(() => navigator.clipboard.readText());
+  expect(svg).toContain('<rect x="0" y="0"');
+
+  // The shape lives in the frame from the very first drag frame.
+  await page.keyboard.press("r");
+  const box = await canvasBox(page);
+  await page.mouse.move(box.x + 320, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 360, box.y + 240, { steps: 4 });
+  await expect
+    .poll(async () => (await sceneOf(page)).nodes[0].children.length)
+    .toBe(2); // parented before pointer-up
+  await page.mouse.up();
 });
