@@ -122,7 +122,12 @@ export function CanvasView({
         engine.duplicate_selection();
       } else if (mod && e.key.toLowerCase() === "g") {
         e.preventDefault();
-        e.shiftKey ? engine.ungroup_selection() : engine.group_selection();
+        if (e.altKey) engine.frame_selection();
+        else if (e.shiftKey) engine.ungroup_selection();
+        else engine.group_selection();
+      } else if (mod && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        engine.flatten_selection();
       } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         onSave();
@@ -299,6 +304,18 @@ export function CanvasView({
         shortcut: "⇧⌘G",
         disabled: !some,
         action: () => engine.ungroup_selection(),
+      },
+      {
+        label: "Frame selection",
+        shortcut: "⌥⌘G",
+        disabled: !some,
+        action: () => engine.frame_selection(),
+      },
+      {
+        label: "Flatten",
+        shortcut: "⌘E",
+        disabled: !some,
+        action: () => engine.flatten_selection(),
       },
       "---",
       {

@@ -49,6 +49,8 @@ export interface SceneNode {
   image: string;
   points: PathAnchor[];
   closed: boolean;
+  /** Extra closed contours, filled with `points` under the even-odd rule. */
+  inner: PathAnchor[][];
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }

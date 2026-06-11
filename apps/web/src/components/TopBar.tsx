@@ -176,6 +176,18 @@ export function TopBar({
           disabled: scene.selection.length === 0,
           action: () => engine.ungroup_selection(),
         },
+        {
+          label: "Frame selection",
+          shortcut: "⌥⌘G",
+          disabled: scene.selection.length === 0,
+          action: () => engine.frame_selection(),
+        },
+        {
+          label: "Flatten",
+          shortcut: "⌘E",
+          disabled: scene.selection.length === 0,
+          action: () => engine.flatten_selection(),
+        },
         "---",
         align("left"),
         align("hcenter"),

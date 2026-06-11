@@ -72,7 +72,8 @@ cd apps/worker && npm run db:remote && npm run deploy
 | Double-click a path | Edit anchors: drag points/handles (`⌥` breaks a handle pair), double-click a point to toggle corner ↔ smooth, marquee-select, `⌫` deletes points |
 | `Space`-drag | Pan · scroll pans · `⌘`+scroll / pinch zooms |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
-| `⌘G` / `⇧⌘G` | Group / ungroup |
+| `⌘G` / `⇧⌘G` / `⌥⌘G` | Group / ungroup / frame selection |
+| `⌘E` | Flatten selection into one path (overlaps become holes) |
 | `⌘C` `⌘X` `⌘V` | Copy, cut, paste (engine clipboard; pastes cascade) |
 | `⌘]` / `⌘[` | Bring to front / send to back |
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |

@@ -154,6 +154,10 @@ pub struct Node {
     pub points: Vec<Anchor>,
     #[serde(default)]
     pub closed: bool,
+    /// Additional closed contours (flatten results). Filled together
+    /// with `points` under the even-odd rule, so overlaps become holes.
+    #[serde(default)]
+    pub inner: Vec<Vec<Anchor>>,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -224,7 +228,7 @@ fn list_at<'a>(nodes: &'a mut Vec<Node>, path: &[usize]) -> &'a mut Vec<Node> {
 fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
     n.x += dx;
     n.y += dy;
-    for a in &mut n.points {
+    for a in n.points.iter_mut().chain(n.inner.iter_mut().flatten()) {
         a.x += dx;
         a.y += dy;
         a.hx_in += dx;
@@ -244,7 +248,7 @@ fn scale_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx: f64, fy: 
     n.y = ny + (n.y - by) * fy;
     n.w *= fx;
     n.h *= fy;
-    for a in &mut n.points {
+    for a in n.points.iter_mut().chain(n.inner.iter_mut().flatten()) {
         a.x = nx + (a.x - bx) * fx;
         a.y = ny + (a.y - by) * fy;
         a.hx_in = nx + (a.hx_in - bx) * fx;
@@ -363,11 +367,21 @@ fn path_bounds(points: &[Anchor], closed: bool) -> (f64, f64, f64, f64) {
 /// Recomputes a path node's bounding box from its anchors.
 fn sync_path_bounds(n: &mut Node) {
     if n.kind == NodeKind::Path && !n.points.is_empty() {
-        let (x, y, w, h) = path_bounds(&n.points, n.closed);
+        let (mut x, mut y, mut x2, mut y2) = {
+            let (bx, by, bw, bh) = path_bounds(&n.points, n.closed);
+            (bx, by, bx + bw, by + bh)
+        };
+        for c in &n.inner {
+            let (bx, by, bw, bh) = path_bounds(c, true);
+            x = x.min(bx);
+            y = y.min(by);
+            x2 = x2.max(bx + bw);
+            y2 = y2.max(by + bh);
+        }
         n.x = x;
         n.y = y;
-        n.w = w;
-        n.h = h;
+        n.w = x2 - x;
+        n.h = y2 - y;
     }
 }
 
@@ -403,15 +417,25 @@ fn path_hit(n: &Node, x: f64, y: f64, tol: f64) -> bool {
     if n.points.len() < 2 {
         return false;
     }
-    let flat = flatten_path(&n.points, n.closed);
     let reach = tol.max(n.stroke_weight / 2.0);
-    for w in flat.windows(2) {
-        if dist_sq_to_segment(x, y, w[0].0, w[0].1, w[1].0, w[1].1) <= reach * reach {
-            return true;
+    let mut inside = false;
+    for (contour, closed) in std::iter::once((&n.points, n.closed))
+        .chain(n.inner.iter().map(|c| (c, true)))
+    {
+        let flat = flatten_path(contour, closed);
+        for w in flat.windows(2) {
+            if dist_sq_to_segment(x, y, w[0].0, w[0].1, w[1].0, w[1].1) <= reach * reach {
+                return true;
+            }
+        }
+        // Even-odd across contours: each containment toggles, so the
+        // overlap of two contours reads as a hole. (Canvas fills open
+        // paths by implicitly closing them; match that.)
+        if point_in_polygon(&flat, x, y) {
+            inside = !inside;
         }
     }
-    // Canvas fills open paths by implicitly closing them; match that.
-    !n.fills.is_empty() && point_in_polygon(&flat, x, y)
+    !n.fills.is_empty() && inside
 }
 
 fn xml_escape(s: &str) -> String {
@@ -534,6 +558,70 @@ fn nearest_anchor(points: &[Anchor], x: f64, y: f64, grab: f64) -> Option<usize>
         .map(|(i, _)| i)
 }
 
+/// Bezier circle constant: handle length factor for a quarter arc.
+const KAPPA: f64 = 0.5522847498;
+
+fn corner_anchor(x: f64, y: f64) -> Anchor {
+    Anchor { x, y, hx_in: x, hy_in: y, hx_out: x, hy_out: y }
+}
+
+/// A rectangle as a closed contour; corner radius becomes bezier arcs.
+fn rect_contour(x: f64, y: f64, w: f64, h: f64, radius: f64) -> Vec<Anchor> {
+    let r = radius.min(w / 2.0).min(h / 2.0);
+    if r <= 0.0 {
+        return vec![
+            corner_anchor(x, y),
+            corner_anchor(x + w, y),
+            corner_anchor(x + w, y + h),
+            corner_anchor(x, y + h),
+        ];
+    }
+    let k = r * KAPPA;
+    let mut a = Vec::with_capacity(8);
+    // Clockwise from the top-left arc end; each corner contributes the
+    // two arc endpoints with one handle each.
+    a.push(Anchor { x: x + r, y, hx_in: x + r - k, hy_in: y, hx_out: x + r, hy_out: y });
+    a.push(Anchor { x: x + w - r, y, hx_in: x + w - r, hy_in: y, hx_out: x + w - r + k, hy_out: y });
+    a.push(Anchor { x: x + w, y: y + r, hx_in: x + w, hy_in: y + r - k, hx_out: x + w, hy_out: y + r });
+    a.push(Anchor { x: x + w, y: y + h - r, hx_in: x + w, hy_in: y + h - r, hx_out: x + w, hy_out: y + h - r + k });
+    a.push(Anchor { x: x + w - r, y: y + h, hx_in: x + w - r + k, hy_in: y + h, hx_out: x + w - r, hy_out: y + h });
+    a.push(Anchor { x: x + r, y: y + h, hx_in: x + r, hy_in: y + h, hx_out: x + r - k, hy_out: y + h });
+    a.push(Anchor { x, y: y + h - r, hx_in: x, hy_in: y + h - r + k, hx_out: x, hy_out: y + h - r });
+    a.push(Anchor { x, y: y + r, hx_in: x, hy_in: y + r, hx_out: x, hy_out: y + r - k });
+    a
+}
+
+/// An ellipse as four smooth anchors with kappa handles.
+fn ellipse_contour(x: f64, y: f64, w: f64, h: f64) -> Vec<Anchor> {
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let (kx, ky) = (w / 2.0 * KAPPA, h / 2.0 * KAPPA);
+    vec![
+        Anchor { x: cx, y, hx_in: cx - kx, hy_in: y, hx_out: cx + kx, hy_out: y },
+        Anchor { x: x + w, y: cy, hx_in: x + w, hy_in: cy - ky, hx_out: x + w, hy_out: cy + ky },
+        Anchor { x: cx, y: y + h, hx_in: cx + kx, hy_in: y + h, hx_out: cx - kx, hy_out: y + h },
+        Anchor { x, y: cy, hx_in: x, hy_in: cy + ky, hx_out: x, hy_out: cy - ky },
+    ]
+}
+
+/// Collects a node's outline contours for flattening (groups recurse;
+/// text and images have no vector outline and contribute nothing).
+fn collect_contours(n: &Node, out: &mut Vec<Vec<Anchor>>) {
+    match n.kind {
+        NodeKind::Rect | NodeKind::Frame => out.push(rect_contour(n.x, n.y, n.w, n.h, n.corner_radius)),
+        NodeKind::Ellipse => out.push(ellipse_contour(n.x, n.y, n.w, n.h)),
+        NodeKind::Path => {
+            out.push(n.points.clone());
+            out.extend(n.inner.iter().cloned());
+        }
+        NodeKind::Group => {
+            for c in &n.children {
+                collect_contours(c, out);
+            }
+        }
+        NodeKind::Text | NodeKind::Image => {}
+    }
+}
+
 /// An in-progress pen path. Lives outside the document until committed,
 /// so undo treats the whole path as one step.
 struct PenState {
@@ -614,6 +702,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             image: String::new(),
             points: Vec::new(),
             closed: false,
+            inner: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -1876,6 +1965,7 @@ impl Engine {
             image: String::new(),
             points: Vec::new(),
             closed: false,
+            inner: Vec::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -1915,6 +2005,159 @@ impl Engine {
         }
         recompute_group_bounds(&mut self.nodes);
         self.selection = new_selection;
+        self.touch();
+    }
+
+    // ----- flatten & frame selection -----
+
+    /// Merges the selected shapes into one path node whose contours fill
+    /// under the even-odd rule (overlaps become holes — Figma's classic
+    /// flatten look). Open paths are closed; text and images are skipped.
+    pub fn flatten_selection(&mut self) {
+        let mut contours: Vec<Vec<Anchor>> = Vec::new();
+        let mut donors: Vec<u32> = Vec::new();
+        let mut style: Option<Node> = None;
+        for &id in &self.selection {
+            if let Some(n) = find_node(&self.nodes, id) {
+                let before = contours.len();
+                collect_contours(n, &mut contours);
+                contours.retain(|c| c.len() >= 2);
+                if contours.len() > before {
+                    donors.push(id);
+                    if style.is_none() {
+                        style = Some(n.clone());
+                    }
+                }
+            }
+        }
+        let (Some(style), Some(&first)) = (style, donors.first()) else {
+            return;
+        };
+        self.snapshot_now();
+
+        // The flattened path takes the first donor's place in z-order.
+        let insert_path = path_to(&self.nodes, first).unwrap();
+        let insert_at = *insert_path.last().unwrap();
+        let id = self.next_id;
+        self.next_id += 1;
+        let mut node = Node {
+            id,
+            name: format!("Path {}", count_kind(&self.nodes, NodeKind::Path) + 1),
+            kind: NodeKind::Path,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            visible: true,
+            locked: false,
+            fills: if style.fills.is_empty() && style.kind != NodeKind::Path {
+                vec![Paint { color: "#d4d4d8".to_string(), opacity: 1.0 }]
+            } else {
+                style.fills.clone()
+            },
+            strokes: style.strokes.clone(),
+            stroke_weight: style.stroke_weight,
+            opacity: style.opacity,
+            blend_mode: style.blend_mode.clone(),
+            corner_radius: 0.0,
+            text: String::new(),
+            font_size: 16.0,
+            font_family: default_font_family(),
+            text_align: default_text_align(),
+            text_valign: default_text_valign(),
+            image: String::new(),
+            points: contours.remove(0),
+            closed: true,
+            inner: contours,
+            export_presets: Vec::new(),
+            children: Vec::new(),
+        };
+        sync_path_bounds(&mut node);
+        let list = list_at(&mut self.nodes, &insert_path);
+        list.insert(insert_at.min(list.len()), node);
+
+        for did in donors {
+            if let Some(p) = path_to(&self.nodes, did) {
+                let i = *p.last().unwrap();
+                list_at(&mut self.nodes, &p).remove(i);
+            }
+        }
+        dissolve_empty_groups(&mut self.nodes);
+        recompute_group_bounds(&mut self.nodes);
+        self.selection = vec![id];
+        self.path_edit = None;
+        self.touch();
+    }
+
+    /// Wraps the selection in a new frame sized to its bounding box.
+    /// All selected nodes must share a parent list (like grouping).
+    pub fn frame_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let mut paths: Vec<Vec<usize>> = Vec::new();
+        for &id in &self.selection {
+            match path_to(&self.nodes, id) {
+                Some(p) => paths.push(p),
+                None => return,
+            }
+        }
+        let parent = paths[0][..paths[0].len() - 1].to_vec();
+        if !paths.iter().all(|p| p[..p.len() - 1] == parent[..]) {
+            return;
+        }
+        let Some((bx, by, bx2, by2)) = self.selection_bbox(&self.selection.clone()) else {
+            return;
+        };
+        self.snapshot_now();
+
+        let mut indices: Vec<usize> = paths.iter().map(|p| *p.last().unwrap()).collect();
+        indices.sort_unstable();
+        let insert_at = indices[indices.len() - 1] + 1 - indices.len();
+        let full_parent_path = {
+            let mut p = parent.clone();
+            p.push(0);
+            p
+        };
+        let list = list_at(&mut self.nodes, &full_parent_path);
+        let mut children = Vec::new();
+        for &i in indices.iter().rev() {
+            children.insert(0, list.remove(i));
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+        let frame = Node {
+            id,
+            name: format!("Frame {}", count_kind(&self.nodes, NodeKind::Frame) + 1),
+            kind: NodeKind::Frame,
+            x: bx,
+            y: by,
+            w: bx2 - bx,
+            h: by2 - by,
+            visible: true,
+            locked: false,
+            fills: vec![Paint { color: "#ffffff".to_string(), opacity: 1.0 }],
+            strokes: Vec::new(),
+            stroke_weight: 1.0,
+            opacity: 1.0,
+            blend_mode: default_blend_mode(),
+            corner_radius: 0.0,
+            text: String::new(),
+            font_size: 16.0,
+            font_family: default_font_family(),
+            text_align: default_text_align(),
+            text_valign: default_text_valign(),
+            image: String::new(),
+            points: Vec::new(),
+            closed: false,
+            inner: Vec::new(),
+            export_presets: Vec::new(),
+            children,
+        };
+        let list = list_at(&mut self.nodes, &full_parent_path);
+        list.insert(insert_at.min(list.len()), frame);
+        self.selection = vec![id];
         self.touch();
     }
 
@@ -2698,6 +2941,7 @@ impl Engine {
             image: String::new(),
             points: Vec::new(),
             closed: false,
+            inner: Vec::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -2847,10 +3091,10 @@ fn draw_node(
                 for p in &n.fills {
                     ctx.set_global_alpha(alpha * p.opacity);
                     ctx.set_fill_style_str(&p.color);
-                    trace_path(ctx, &n.points, n.closed);
-                    ctx.fill();
+                    trace_path_all(ctx, n);
+                    ctx.fill_with_canvas_winding_rule(web_sys::CanvasWindingRule::Evenodd);
                 }
-                stroke_paints(ctx, n, alpha, |ctx| trace_path(ctx, &n.points, n.closed));
+                stroke_paints(ctx, n, alpha, |ctx| trace_path_all(ctx, n));
             }
         }
         NodeKind::Image => {
@@ -2932,6 +3176,20 @@ fn stroke_paints(
 /// Traces a path node's bezier outline into the current canvas path.
 fn trace_path(ctx: &CanvasRenderingContext2d, points: &[Anchor], closed: bool) {
     ctx.begin_path();
+    trace_contour(ctx, points, closed);
+}
+
+/// Traces every contour of a path node into one canvas path, so an
+/// even-odd fill turns contour overlaps into holes.
+fn trace_path_all(ctx: &CanvasRenderingContext2d, n: &Node) {
+    ctx.begin_path();
+    trace_contour(ctx, &n.points, n.closed);
+    for c in &n.inner {
+        trace_contour(ctx, c, true);
+    }
+}
+
+fn trace_contour(ctx: &CanvasRenderingContext2d, points: &[Anchor], closed: bool) {
     if points.is_empty() {
         return;
     }
@@ -3086,10 +3344,14 @@ fn svg_node(
             }
         }
         NodeKind::Path => {
-            let d = path_d(&n.points, n.closed, ox, oy);
+            let mut d = path_d(&n.points, n.closed, ox, oy);
+            for c in &n.inner {
+                d.push(' ');
+                d.push_str(&path_d(c, true, ox, oy));
+            }
             for p in &n.fills {
                 out.push_str(&format!(
-                    r#"<path d="{d}" fill="{}" fill-opacity="{}"/>"#,
+                    r#"<path d="{d}" fill-rule="evenodd" fill="{}" fill-opacity="{}"/>"#,
                     xml_escape(&p.color),
                     p.opacity
                 ));

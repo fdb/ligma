@@ -695,6 +695,86 @@ e21.set_tool("select");
 e21.enter_path_edit(99999);
 assert(!e21.path_edit_active(), "enter_path_edit ignores unknown ids");
 
+// Flatten: overlapping shapes merge into one even-odd path (hole).
+const e23 = new Engine();
+const draw23 = (tool, x1, y1, x2, y2) => {
+  e23.set_tool(tool);
+  e23.pointer_down(x1, y1, false, false);
+  e23.pointer_move(x2, y2);
+  e23.pointer_up();
+};
+draw23("rect", 100, 100, 300, 300);
+draw23("rect", 200, 200, 400, 400);
+const ids23 = JSON.parse(e23.scene()).nodes.map((n) => n.id);
+e23.select(ids23[0], false);
+e23.select(ids23[1], true);
+e23.flatten_selection();
+let s23 = JSON.parse(e23.scene());
+assert(s23.nodes.length === 1 && s23.nodes[0].kind === "path", "flatten yields one path node");
+const flat23 = s23.nodes[0];
+assert(flat23.points.length === 4 && flat23.inner.length === 1, "two rects become two contours");
+assert(flat23.closed === true, "flattened contours are closed");
+assert(flat23.x === 100 && flat23.w === 300, "flattened bounds span both shapes");
+assert(s23.selection[0] === flat23.id, "flattened path is selected");
+// Even-odd: the overlap square (200..300)^2 is a hole.
+assert(e23.node_at(150, 150) === flat23.id, "solid region hits");
+assert(e23.node_at(250, 250) == null, "overlap region is a hole (even-odd)");
+assert(e23.node_at(350, 350) === flat23.id, "second shape's solid region hits");
+const svg23 = e23.export_svg(flat23.id);
+assert(svg23.includes('fill-rule="evenodd"'), "SVG uses the even-odd fill rule");
+assert(svg23.split("M ").length === 3, "SVG d contains both contours");
+e23.undo();
+assert(JSON.parse(e23.scene()).nodes.length === 2, "flatten is one undo step");
+e23.redo();
+
+// Flatten converts rounded rects and ellipses to beziers.
+const e24 = new Engine();
+const draw24 = (tool, x1, y1, x2, y2) => {
+  e24.set_tool(tool);
+  e24.pointer_down(x1, y1, false, false);
+  e24.pointer_move(x2, y2);
+  e24.pointer_up();
+};
+draw24("rect", 0, 0, 100, 100);
+const rid24 = JSON.parse(e24.scene()).nodes[0].id;
+e24.set_field(rid24, "cornerRadius", 20);
+e24.select(rid24, false);
+e24.flatten_selection();
+let n24 = JSON.parse(e24.scene()).nodes[0];
+assert(n24.kind === "path" && n24.points.length === 8, "rounded rect flattens to 8 arc anchors");
+assert(n24.points[0].hxIn !== n24.points[0].x, "arc anchors carry handles");
+draw24("ellipse", 200, 0, 300, 100);
+const eid24 = JSON.parse(e24.scene()).nodes[1].id;
+e24.select(eid24, false);
+e24.flatten_selection();
+const n24b = JSON.parse(e24.scene()).nodes[1];
+assert(n24b.kind === "path" && n24b.points.length === 4, "ellipse flattens to 4 smooth anchors");
+assert(e24.node_at(250, 50) === n24b.id, "flattened ellipse center hits");
+assert(e24.node_at(204, 4) == null, "flattened ellipse corner misses (curve, not box)");
+
+// Frame selection wraps nodes in a bbox-sized frame.
+const e25 = new Engine();
+const draw25 = (x1, y1, x2, y2) => {
+  e25.set_tool("rect");
+  e25.pointer_down(x1, y1, false, false);
+  e25.pointer_move(x2, y2);
+  e25.pointer_up();
+};
+draw25(100, 100, 200, 200);
+draw25(300, 150, 400, 250);
+const ids25 = JSON.parse(e25.scene()).nodes.map((n) => n.id);
+e25.select(ids25[0], false);
+e25.select(ids25[1], true);
+e25.frame_selection();
+let s25 = JSON.parse(e25.scene());
+assert(s25.nodes.length === 1 && s25.nodes[0].kind === "frame", "frame selection wraps in a frame");
+const fr25 = s25.nodes[0];
+assert(fr25.x === 100 && fr25.y === 100 && fr25.w === 300 && fr25.h === 150, "frame matches the bbox");
+assert(fr25.children.length === 2, "both nodes nest inside");
+assert(s25.selection[0] === fr25.id, "the new frame is selected");
+e25.undo();
+assert(JSON.parse(e25.scene()).nodes.length === 2, "frame selection undoes in one step");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");
