@@ -1,10 +1,11 @@
 # TODO / FEATURE WISHLIST
 
-- Code architecture: all code is now in one lib.rs. Can we start thinking about splitting this up into multiple files? 
 - Text spans: per-span font family and size (bold/italic/color shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
 # DONE (things are moved here once they are done)
+
+- Code architecture: lib.rs (4.8k lines) split into focused modules — model (node/paint types + serde), tree (lookup/transform helpers), geometry (beziers, contours, bool results), clip (Greiner-Hormann + offsetting), text (span helpers), render (canvas), svg (export); lib.rs keeps the Engine itself (~3.2k)
 
 - Non-destructive booleans: Union/Subtract/Intersect now produce a boolean group with the source shapes alive inside — move or edit a source (deep select / outliner) and the combined outline re-renders live; the group itself carries the fill/stroke, hit-tests against the computed result (holes miss), exports as an even-odd SVG path, ungroups back to the sources, and ⌘E flattens it into a real editable path
 - Clicking one node of a multi-selection narrows the selection to it on release (Figma behavior)
