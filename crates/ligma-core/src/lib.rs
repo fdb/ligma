@@ -31,6 +31,9 @@ pub enum NodeKind {
     Path,
     Component,
     Instance,
+    /// Non-destructive boolean group: renders the clip of its children
+    /// (per `bool_op`) while the source shapes stay editable inside.
+    Bool,
 }
 
 /// A path anchor point with its bezier control handles. Everything is in
@@ -215,6 +218,10 @@ pub struct Node {
     /// Master component id (instance nodes only).
     #[serde(default)]
     pub component: u32,
+    /// Boolean operation (bool nodes only): "union", "subtract",
+    /// "intersect".
+    #[serde(default)]
+    pub bool_op: String,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -380,6 +387,19 @@ fn recompute_group_bounds(nodes: &mut [Node]) {
             n.w = max_x - min_x;
             n.h = max_y - min_y;
         }
+        // A boolean group's box is its computed result's bounds (an
+        // intersect can be much smaller than its sources' union).
+        if n.kind == NodeKind::Bool {
+            let pts: Vec<(f64, f64)> = bool_rings(n).into_iter().flatten().collect();
+            if !pts.is_empty() {
+                let min_x = pts.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+                let min_y = pts.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+                n.x = min_x;
+                n.y = min_y;
+                n.w = pts.iter().map(|p| p.0).fold(f64::MIN, f64::max) - min_x;
+                n.h = pts.iter().map(|p| p.1).fold(f64::MIN, f64::max) - min_y;
+            }
+        }
     }
 }
 
@@ -388,7 +408,9 @@ fn dissolve_empty_groups(nodes: &mut Vec<Node>) {
     for n in nodes.iter_mut() {
         dissolve_empty_groups(&mut n.children);
     }
-    nodes.retain(|n| n.kind != NodeKind::Group || !n.children.is_empty());
+    nodes.retain(|n| {
+        !matches!(n.kind, NodeKind::Group | NodeKind::Bool) || !n.children.is_empty()
+    });
 }
 
 // ----- bezier path geometry -----
@@ -774,8 +796,50 @@ fn collect_contours(n: &Node, out: &mut Vec<Vec<Anchor>>) {
                 collect_contours(c, out);
             }
         }
+        NodeKind::Bool => {
+            // The computed boolean result, as straight-line contours —
+            // this is what flatten (⌘E) bakes into a real path.
+            for ring in bool_rings(n) {
+                out.push(ring.into_iter().map(|(x, y)| corner_anchor(x, y)).collect());
+            }
+        }
         NodeKind::Text | NodeKind::Image => {}
     }
+}
+
+/// The clip result of a bool node's children, as flattened polygon rings
+/// filled under the even-odd rule. The first visible child is the
+/// subject; each later child clips into it (single-outline scope, like
+/// the pathfinder commands).
+fn bool_rings(n: &Node) -> Vec<Vec<(f64, f64)>> {
+    let opcode = match n.bool_op.as_str() {
+        "intersect" => 0,
+        "subtract" => 2,
+        _ => 1, // union
+    };
+    let outline = |c: &Node| -> Option<Vec<(f64, f64)>> {
+        let mut contours = Vec::new();
+        collect_contours(c, &mut contours);
+        let first = contours.into_iter().find(|c| c.len() >= 2)?;
+        Some(flatten_path(&first, true))
+    };
+    let mut rings: Vec<Vec<(f64, f64)>> = Vec::new();
+    for c in n.children.iter().filter(|c| c.visible) {
+        let Some(poly) = outline(c) else { continue };
+        if rings.is_empty() {
+            rings.push(poly);
+        } else {
+            let base = rings.remove(0);
+            let mut out = polygon_clip(&base, &poly, opcode);
+            if out.is_empty() {
+                rings.clear();
+            } else {
+                out.append(&mut rings);
+                rings = out;
+            }
+        }
+    }
+    rings
 }
 
 // ----- polygon boolean ops (Greiner-Hormann on flattened outlines) -----
@@ -1146,6 +1210,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             inner: Vec::new(),
             spans: Vec::new(),
             component: 0,
+            bool_op: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -2661,6 +2726,7 @@ impl Engine {
             inner: Vec::new(),
             spans: Vec::new(),
             component: 0,
+            bool_op: String::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -2679,7 +2745,9 @@ impl Engine {
             .iter()
             .copied()
             .filter(|&id| {
-                find_node(&self.nodes, id).map(|n| n.kind == NodeKind::Group).unwrap_or(false)
+                find_node(&self.nodes, id)
+                    .map(|n| matches!(n.kind, NodeKind::Group | NodeKind::Bool))
+                    .unwrap_or(false)
             })
             .collect();
         if group_ids.is_empty() {
@@ -2766,6 +2834,7 @@ impl Engine {
             inner: contours,
             spans: Vec::new(),
             component: 0,
+            bool_op: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         };
@@ -2820,24 +2889,32 @@ impl Engine {
         else {
             return;
         };
-        let mut out = polygon_clip(&poly_a, &poly_b, opcode);
+        let out = polygon_clip(&poly_a, &poly_b, opcode);
         if out.is_empty() {
             return;
         }
         self.snapshot_now();
 
+        // Non-destructive: the sources move into a boolean group whose
+        // outline is recomputed from them live; ⌘E bakes it to a path.
         let style = find_node(&self.nodes, sa).unwrap().clone();
         let insert_path = path_to(&self.nodes, sa).unwrap();
         let insert_at = *insert_path.last().unwrap();
         let id = self.next_id;
         self.next_id += 1;
-        let to_anchors = |c: Vec<(f64, f64)>| -> Vec<Anchor> {
-            c.into_iter().map(|(x, y)| corner_anchor(x, y)).collect()
-        };
-        let mut node = Node {
+        let name = format!(
+            "{} {}",
+            match opcode {
+                0 => "Intersect",
+                2 => "Subtract",
+                _ => "Union",
+            },
+            count_kind(&self.nodes, NodeKind::Bool) + 1
+        );
+        let node = Node {
             id,
-            name: format!("Path {}", count_kind(&self.nodes, NodeKind::Path) + 1),
-            kind: NodeKind::Path,
+            name,
+            kind: NodeKind::Bool,
             x: 0.0,
             y: 0.0,
             w: 0.0,
@@ -2860,21 +2937,25 @@ impl Engine {
             text_align: default_text_align(),
             text_valign: default_text_valign(),
             image: String::new(),
-            points: to_anchors(out.remove(0)),
-            closed: true,
-            inner: out.into_iter().map(to_anchors).collect(),
+            points: Vec::new(),
+            closed: false,
+            inner: Vec::new(),
             spans: Vec::new(),
             component: 0,
+            bool_op: op.to_string(),
             export_presets: Vec::new(),
             children: Vec::new(),
         };
-        sync_path_bounds(&mut node);
         let list = list_at(&mut self.nodes, &insert_path);
         list.insert(insert_at.min(list.len()), node);
-        for did in [sa, sb] {
-            if let Some(p) = path_to(&self.nodes, did) {
+        // Move the sources inside, subject (lower z) first.
+        for sid in [sa, sb] {
+            if let Some(p) = path_to(&self.nodes, sid) {
                 let i = *p.last().unwrap();
-                list_at(&mut self.nodes, &p).remove(i);
+                let child = list_at(&mut self.nodes, &p).remove(i);
+                if let Some(b) = find_node_mut(&mut self.nodes, id) {
+                    b.children.push(child);
+                }
             }
         }
         dissolve_empty_groups(&mut self.nodes);
@@ -2951,6 +3032,7 @@ impl Engine {
                 inner: vec![to_anchors(&inner)],
                 spans: Vec::new(),
                 component: 0,
+            bool_op: String::new(),
                 export_presets: Vec::new(),
                 children: Vec::new(),
             };
@@ -3080,6 +3162,7 @@ impl Engine {
             inner: Vec::new(),
             spans: Vec::new(),
             component: 0,
+            bool_op: String::new(),
             export_presets: Vec::new(),
             children,
         };
@@ -3318,7 +3401,11 @@ impl Engine {
         }
         if parent != 0 {
             match find_node(&self.nodes, parent) {
-                Some(p) if matches!(p.kind, NodeKind::Frame | NodeKind::Group | NodeKind::Component) => {}
+                Some(p)
+                    if matches!(
+                        p.kind,
+                        NodeKind::Frame | NodeKind::Group | NodeKind::Component | NodeKind::Bool
+                    ) => {}
                 _ => return,
             }
         }
@@ -3438,7 +3525,10 @@ impl Engine {
                 break;
             };
             chain.push(n.id);
-            if matches!(n.kind, NodeKind::Frame | NodeKind::Component | NodeKind::Group) {
+            if matches!(
+                n.kind,
+                NodeKind::Frame | NodeKind::Component | NodeKind::Group | NodeKind::Bool
+            ) {
                 list = &n.children;
             } else {
                 break;
@@ -3779,6 +3869,20 @@ impl Engine {
     /// outline (with a zoom-aware grab tolerance) so empty bbox corners
     /// don't swallow clicks.
     fn node_hit(&self, n: &Node, x: f64, y: f64) -> bool {
+        // Boolean groups hit against their computed result (even-odd),
+        // so subtract holes don't swallow clicks.
+        if n.kind == NodeKind::Bool {
+            if !n.contains(x, y) {
+                return false;
+            }
+            let mut inside = false;
+            for ring in bool_rings(n) {
+                if point_in_polygon(&ring, x, y) {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
         if n.kind != NodeKind::Path {
             return n.contains(x, y);
         }
@@ -3974,6 +4078,7 @@ impl Engine {
             NodeKind::Path => (format!("Path {count}"), "#d4d4d8"),
             NodeKind::Component => (format!("Component {count}"), "#ffffff"),
             NodeKind::Instance => (format!("Instance {count}"), "#ffffff"),
+            NodeKind::Bool => (format!("Boolean {count}"), "#d4d4d8"),
         };
         self.nodes.push(Node {
             id,
@@ -4002,6 +4107,7 @@ impl Engine {
             inner: Vec::new(),
             spans: Vec::new(),
             component: 0,
+            bool_op: String::new(),
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -4213,6 +4319,32 @@ fn draw_node(
                     ctx.fill_with_canvas_winding_rule(web_sys::CanvasWindingRule::Evenodd);
                 }
                 stroke_paints(ctx, n, alpha, |ctx| trace_path_all(ctx, n));
+            }
+        }
+        NodeKind::Bool => {
+            // The live clip of the children; the sources themselves are
+            // never drawn, only their combined outline.
+            let rings = bool_rings(n);
+            if !rings.is_empty() {
+                let trace = |ctx: &CanvasRenderingContext2d| {
+                    ctx.begin_path();
+                    for ring in &rings {
+                        if let Some(&(fx, fy)) = ring.first() {
+                            ctx.move_to(fx, fy);
+                            for &(px, py) in &ring[1..] {
+                                ctx.line_to(px, py);
+                            }
+                            ctx.close_path();
+                        }
+                    }
+                };
+                for p in &n.fills {
+                    ctx.set_global_alpha(alpha * p.opacity);
+                    apply_fill(ctx, p, n.x, n.y, n.w, n.h);
+                    trace(ctx);
+                    ctx.fill_with_canvas_winding_rule(web_sys::CanvasWindingRule::Evenodd);
+                }
+                stroke_paints(ctx, n, alpha, trace);
             }
         }
         NodeKind::Image => {
@@ -4589,6 +4721,32 @@ fn svg_node(
             for c in &n.inner {
                 d.push(' ');
                 d.push_str(&path_d(c, true, ox, oy));
+            }
+            for (pi, p) in n.fills.iter().enumerate() {
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out, x, y, n.w, n.h);
+                out.push_str(&format!(
+                    r#"<path d="{d}" fill-rule="evenodd" fill="{fill}" fill-opacity="{}"/>"#,
+                    p.opacity
+                ));
+            }
+            for p in &n.strokes {
+                out.push_str(&format!(
+                    r#"<path d="{d}" fill="none" stroke="{}" stroke-opacity="{}" stroke-width="{}"/>"#,
+                    xml_escape(&p.color),
+                    p.opacity,
+                    n.stroke_weight
+                ));
+            }
+        }
+        NodeKind::Bool => {
+            let mut d = String::new();
+            for ring in bool_rings(n) {
+                let Some(&(fx, fy)) = ring.first() else { continue };
+                d.push_str(&format!("M {} {} ", fx - ox, fy - oy));
+                for &(px, py) in &ring[1..] {
+                    d.push_str(&format!("L {} {} ", px - ox, py - oy));
+                }
+                d.push_str("Z ");
             }
             for (pi, p) in n.fills.iter().enumerate() {
                 let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out, x, y, n.w, n.h);

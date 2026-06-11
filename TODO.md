@@ -4,8 +4,10 @@
 - Text spans: per-span font family and size (bold/italic/color shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
-- pathfinder operations stay non-destructive: they appear as a group, with the source shapes inside, until flattened
 # DONE (things are moved here once they are done)
+
+- Non-destructive booleans: Union/Subtract/Intersect now produce a boolean group with the source shapes alive inside — move or edit a source (deep select / outliner) and the combined outline re-renders live; the group itself carries the fill/stroke, hit-tests against the computed result (holes miss), exports as an even-odd SVG path, ungroups back to the sources, and ⌘E flattens it into a real editable path
+- Clicking one node of a multi-selection narrows the selection to it on release (Figma behavior)
 
 - Frame-interior drags: dragging inside an empty frame moves the frame; inside a non-empty one it rubber-bands that frame's children (a plain click still selects the frame, and a selected frame still drags normally)
 - Document colors in the color picker: a swatch row of the colors already used in the file (fills, strokes, gradient stops, text spans), most frequent first

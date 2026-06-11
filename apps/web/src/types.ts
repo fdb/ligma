@@ -7,7 +7,8 @@ export type NodeKind =
   | "image"
   | "path"
   | "component"
-  | "instance";
+  | "instance"
+  | "bool";
 
 export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "pen" | "hand";
 
@@ -69,6 +70,8 @@ export interface SceneNode {
   spans: { start: number; len: number; bold: boolean; italic: boolean; color: string }[];
   /** Master component id (instance nodes only). */
   component: number;
+  /** Boolean operation (bool nodes only): "union" | "subtract" | "intersect". */
+  boolOp: string;
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }

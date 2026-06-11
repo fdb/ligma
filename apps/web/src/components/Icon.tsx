@@ -37,6 +37,12 @@ const paths: Record<string, React.ReactNode> = {
     <path fill="currentColor" stroke="none" d="M8 2.2 13.8 8 8 13.8 2.2 8z" />
   ),
   instance: <path d="M8 2.9 13.1 8 8 13.1 2.9 8z" />,
+  bool: (
+    <>
+      <circle cx="6" cy="6" r="3.8" />
+      <circle cx="10" cy="10" r="3.8" />
+    </>
+  ),
   comment: (
     <path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3 3v-3H4.5a2 2 0 0 1-2-2z" />
   ),

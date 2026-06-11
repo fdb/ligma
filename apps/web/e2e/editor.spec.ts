@@ -1167,9 +1167,12 @@ test("pathfinder: union and subtract from the context menu", async ({ page }) =>
     }, [x, y]);
 
   // The L remains: subject-only solid, overlap and top-only cut away.
+  // The op is non-destructive: a bool group with both sources inside.
   let s = await sceneOf(page);
   expect(s.nodes.length).toBe(1);
-  expect(s.nodes[0].kind).toBe("path");
+  expect(s.nodes[0].kind).toBe("bool");
+  expect(s.nodes[0].boolOp).toBe("subtract");
+  expect(s.nodes[0].children.length).toBe(2);
   await expect.poll(() => pixelAt(250, 250)).toEqual([212, 212, 216]);
   await expect.poll(() => pixelAt(350, 350)).toEqual([233, 233, 236]);
   await expect.poll(() => pixelAt(450, 450)).toEqual([233, 233, 236]);
@@ -1186,6 +1189,25 @@ test("pathfinder: union and subtract from the context menu", async ({ page }) =>
   s = await sceneOf(page);
   expect(s.nodes.length).toBe(1);
   await expect.poll(() => pixelAt(350, 350)).toEqual([212, 212, 216]);
+
+  // Editing a source inside the union updates the render live: drag the
+  // top rect away so the former overlap zone empties out.
+  const target = box; // reuse canvas box
+  await page.mouse.dblclick(target.x + 450, target.y + 450); // deep select top rect
+  await drag(page, 450, 450, 650, 450); // move it right by 200
+  await expect.poll(() => pixelAt(310, 450)).toEqual([233, 233, 236]);
+  await expect.poll(() => pixelAt(610, 450)).toEqual([212, 212, 216]);
+
+  // Flatten (⌘E) bakes the boolean into a real path.
+  await page.keyboard.press("Escape");
+  await clickCanvas(page, 250, 250);
+  await page.keyboard.press("Meta+e");
+  await expect
+    .poll(async () => {
+      const sc = await sceneOf(page);
+      return [sc.nodes.length, sc.nodes[0].kind];
+    })
+    .toEqual([1, "path"]);
 });
 
 test("rich text: ⌘B styles the selection; panel buttons style all", async ({ page }) => {
