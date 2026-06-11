@@ -1765,3 +1765,46 @@ test("pathfinder handles 3 shapes and preserves holes", async ({ page }) => {
   await expect.poll(() => pixelAt(330, 250)).toEqual([233, 233, 236]);
   await expect.poll(() => pixelAt(440, 250)).toEqual([233, 233, 236]);
 });
+
+test("outline stroke on an open path renders round caps and joins", async ({ page }) => {
+  await openNewDocument(page);
+  const box = await canvasBox(page);
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // Open L path with the pen, committed via Enter.
+  await page.keyboard.press("p");
+  await clickCanvas(page, 200, 200);
+  await clickCanvas(page, 400, 200);
+  await clickCanvas(page, 400, 400);
+  await page.keyboard.press("Enter");
+
+  // Bump the stroke weight (the second "W" field — the first is the
+  // node's width), then outline via the Object menu.
+  const wField = page.locator("label", { hasText: "W" }).locator("input").nth(1);
+  await wField.fill("24");
+  await wField.press("Enter");
+  await page.getByRole("button", { name: "Object" }).click();
+  await page.getByText("Outline stroke").click();
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return [s.nodes.length, s.nodes[0].kind, s.nodes[0].name.includes("(stroke)")];
+    })
+    .toEqual([1, "path", true]);
+
+  // The band is solid mid-leg; the round cap extends past the start; the
+  // bend interior stays empty. Stroke color is the default dark ink.
+  const dark = async (x: number, y: number) => (await pixelAt(x, y))[0] < 120;
+  await expect.poll(() => dark(300, 200)).toBe(true); // horizontal leg
+  await expect.poll(() => dark(400, 300)).toBe(true); // vertical leg
+  await expect.poll(() => dark(192, 200)).toBe(true); // round start cap
+  await expect.poll(() => dark(180, 200)).toBe(false); // beyond the cap
+  await expect.poll(() => dark(340, 280)).toBe(false); // bend interior
+});

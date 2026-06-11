@@ -373,3 +373,52 @@ pub(crate) fn offset_polygon(poly: &[(f64, f64)], d: f64) -> Vec<(f64, f64)> {
     out
 }
 
+/// Outline of an open polyline stroked `2 * half` wide: the union of
+/// per-segment capsules. Round joins and round end caps fall out of the
+/// cap circles, and a union can never self-intersect — the usual failure
+/// mode of offsetting both sides of a sharp corner separately.
+pub(crate) fn stroke_polyline(pts: &[(f64, f64)], half: f64) -> Vec<Vec<(f64, f64)>> {
+    const ARC: usize = 8;
+    use std::f64::consts::PI;
+    // Decimate first: flattened beziers sample every segment finely, and
+    // a capsule per micro-segment makes the union quadratic for nothing.
+    let min_step = (half * 0.5).max(1.0);
+    let mut path: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for &p in pts {
+        if path.last().is_none_or(|&l: &(f64, f64)| (p.0 - l.0).hypot(p.1 - l.1) >= min_step) {
+            path.push(p);
+        }
+    }
+    if let (Some(&last_in), Some(&last_kept)) = (pts.last(), path.last()) {
+        if last_in != last_kept {
+            path.push(last_in);
+        }
+    }
+    if path.len() < 2 {
+        return Vec::new();
+    }
+
+    let capsule = |a: (f64, f64), b: (f64, f64)| -> Vec<(f64, f64)> {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = dx.hypot(dy).max(1e-12);
+        let (ux, uy) = (dx / len, dy / len);
+        let th0 = (-ux).atan2(uy); // angle of the left normal (uy, -ux)
+        let mut out = Vec::with_capacity(2 * ARC + 2);
+        for k in 0..=ARC {
+            let th = th0 + PI * (k as f64) / (ARC as f64);
+            out.push((b.0 + th.cos() * half, b.1 + th.sin() * half));
+        }
+        for k in 0..=ARC {
+            let th = th0 + PI + PI * (k as f64) / (ARC as f64);
+            out.push((a.0 + th.cos() * half, a.1 + th.sin() * half));
+        }
+        out
+    };
+
+    let mut region: Vec<Vec<(f64, f64)>> = Vec::new();
+    for w in path.windows(2) {
+        let cap = capsule(w[0], w[1]);
+        region = if region.is_empty() { vec![cap] } else { region_clip(&region, &[cap], 1) };
+    }
+    region
+}

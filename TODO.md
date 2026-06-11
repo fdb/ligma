@@ -2,8 +2,10 @@
 
 - Text spans: per-span font family and size (bold/italic/color shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
-- outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
+
 # DONE (things are moved here once they are done)
+
+- Outline stroke on open paths: an open pen path's stroke converts to a capsule-union outline — round joins at every bend and round caps at both ends (closed outlines keep their mitered rings)
 
 - Pathfinder on 3+ shapes and on shapes with holes: the clipper now operates on whole even-odd regions (every contour of every operand, including path holes and nested boolean results), so Union/Subtract/Intersect accept any 2+ selection and fold bottom-to-top; coincident snapped edges are handled via a sub-visible tie-breaking nudge with the output snapped back to a 0.001px grid
 

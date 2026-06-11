@@ -1999,8 +1999,10 @@ impl Engine {
     /// (outer + inner offset contours under the even-odd rule). The new
     /// path is filled with the first stroke paint; the body fill is gone.
     pub fn outline_stroke(&mut self) {
-        // Collect convertible nodes first: stroked closed outlines.
-        let mut jobs: Vec<(u32, Vec<(f64, f64)>, Paint, f64, Node)> = Vec::new();
+        // Collect convertible nodes first. Closed outlines become mitered
+        // offset rings; open paths become capsule-union outlines with
+        // round joins and round end caps.
+        let mut jobs: Vec<(u32, Vec<Vec<(f64, f64)>>, Paint, Node)> = Vec::new();
         for &id in &self.selection {
             let Some(n) = find_node(&self.nodes, id) else {
                 continue;
@@ -2008,28 +2010,38 @@ impl Engine {
             if n.strokes.is_empty() || n.stroke_weight <= 0.0 {
                 continue;
             }
-            let mut contours = Vec::new();
-            collect_contours(n, &mut contours);
-            let Some(first) = contours.into_iter().find(|c| c.len() >= 2) else {
-                continue;
+            let rings = if n.kind == NodeKind::Path && !n.closed && n.points.len() >= 2 {
+                stroke_polyline(&flatten_path(&n.points, false), n.stroke_weight / 2.0)
+            } else {
+                let mut contours = Vec::new();
+                collect_contours(n, &mut contours);
+                let Some(first) = contours.into_iter().find(|c| c.len() >= 2) else {
+                    continue;
+                };
+                let mut poly = simplify_polygon(&flatten_path(&first, true));
+                if poly.len() < 3 {
+                    continue;
+                }
+                if signed_area(&poly) < 0.0 {
+                    poly.reverse();
+                }
+                vec![
+                    offset_polygon(&poly, n.stroke_weight / 2.0),
+                    offset_polygon(&poly, -n.stroke_weight / 2.0),
+                ]
             };
-            let mut poly = simplify_polygon(&flatten_path(&first, true));
-            if poly.len() < 3 {
+            if rings.is_empty() || rings[0].len() < 3 {
                 continue;
             }
-            if signed_area(&poly) < 0.0 {
-                poly.reverse();
-            }
-            jobs.push((id, poly, n.strokes[0].clone(), n.stroke_weight, n.clone()));
+            jobs.push((id, rings, n.strokes[0].clone(), n.clone()));
         }
         if jobs.is_empty() {
             return;
         }
         self.snapshot_now();
         let mut new_sel = Vec::new();
-        for (id, poly, paint, weight, style) in jobs {
-            let outer = offset_polygon(&poly, weight / 2.0);
-            let inner = offset_polygon(&poly, -weight / 2.0);
+        for (id, mut rings, paint, style) in jobs {
+            let outer = rings.remove(0);
             let to_anchors = |c: &[(f64, f64)]| -> Vec<Anchor> {
                 c.iter().map(|&(x, y)| corner_anchor(x, y)).collect()
             };
@@ -2059,7 +2071,7 @@ impl Engine {
                 image: String::new(),
                 points: to_anchors(&outer),
                 closed: true,
-                inner: vec![to_anchors(&inner)],
+                inner: rings.iter().map(|r| to_anchors(r)).collect(),
                 spans: Vec::new(),
                 component: 0,
             bool_op: String::new(),

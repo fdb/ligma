@@ -1032,6 +1032,40 @@ const so2 = JSON.parse(eo2.scene());
 assert(so2.nodes.length === 1 && so2.nodes[0].kind === "path", "stroke-only shape is replaced");
 assert(so2.nodes[0].inner.length === 1, "replacement is a ring");
 
+// Outline stroke on an OPEN path: capsule union with round joins/caps.
+const eop = new Engine();
+eop.set_tool("pen");
+eop.pointer_down(100, 100, false, false);
+eop.pointer_up();
+eop.pointer_down(300, 100, false, false);
+eop.pointer_up();
+eop.pointer_down(300, 300, false, false);
+eop.pointer_up();
+eop.pen_commit();
+{
+  const path = JSON.parse(eop.scene()).nodes[0];
+  eop.select(path.id, false);
+  eop.set_field(path.id, "strokeWeight", 20);
+  eop.outline_stroke();
+  const ring = JSON.parse(eop.scene()).nodes[0];
+  assert(
+    ring.kind === "path" && ring.name.includes("(stroke)"),
+    "open-path outline replaces the stroke-only path",
+  );
+  assert(
+    ring.x === 90 && ring.y === 90 && ring.w === 220 && ring.h === 220,
+    "capsule outline bounds = path bounds + half weight each side",
+  );
+  assert(
+    eop.node_at(200, 100) === ring.id && eop.node_at(300, 200) === ring.id,
+    "both legs of the stroked L are solid",
+  );
+  assert(eop.node_at(95, 100) === ring.id, "round start cap extends past the endpoint");
+  assert(eop.node_at(82, 100) == null, "nothing beyond the cap radius");
+  assert(eop.node_at(250, 200) == null, "the bend interior stays empty");
+  assert(eop.node_at(305, 95) === ring.id, "the join corner is rounded, not mitered");
+}
+
 // Rich text spans: bold/italic runs merge, split, clamp, export.
 const es = new Engine();
 es.set_tool("text");
