@@ -511,8 +511,9 @@ struct PathEdit {
 
 enum PathDrag {
     None,
-    /// Moving every selected anchor by the pointer delta.
-    Anchors { last_x: f64, last_y: f64, moved: bool },
+    /// Moving every selected anchor. Positions are recomputed from the
+    /// drag-start clones so snapping never accumulates drift.
+    Anchors { starts: Vec<(usize, Anchor)>, ox: f64, oy: f64, moved: bool },
     /// Dragging one control handle; `broken` (alt) frees it from its
     /// mirror, otherwise the opposite handle stays collinear.
     Handle { idx: usize, out: bool, broken: bool, moved: bool },
@@ -964,8 +965,16 @@ impl Engine {
                 pe.selected = vec![i];
             }
             self.begin_mutation();
+            let starts: Vec<(usize, Anchor)> = {
+                let pe = self.path_edit.as_ref().unwrap();
+                let n = find_node(&self.nodes, pe.id).unwrap();
+                pe.selected
+                    .iter()
+                    .filter_map(|&i| n.points.get(i).map(|a| (i, a.clone())))
+                    .collect()
+            };
             let pe = self.path_edit.as_mut().unwrap();
-            pe.drag = PathDrag::Anchors { last_x: x, last_y: y, moved: false };
+            pe.drag = PathDrag::Anchors { starts, ox: x, oy: y, moved: false };
             return;
         }
         // Empty space: rubber-band anchors.
@@ -983,38 +992,111 @@ impl Engine {
         let id = pe.id;
         match &mut pe.drag {
             PathDrag::None => {}
-            PathDrag::Anchors { last_x, last_y, moved } => {
-                let (dx, dy) = (x - *last_x, y - *last_y);
-                *last_x = x;
-                *last_y = y;
+            PathDrag::Anchors { starts, ox, oy, moved } => {
+                let (mut dx, mut dy) = (x - *ox, y - *oy);
                 *moved = *moved || dx != 0.0 || dy != 0.0;
-                let sel = pe.selected.clone();
+                let starts = starts.clone();
+                let moved_idx: Vec<usize> = starts.iter().map(|s| s.0).collect();
+
+                // Snap dragged anchors to the path's stationary anchors,
+                // axis by axis (same scheme as node-move snapping).
+                let threshold = 6.0 / self.zoom;
+                self.guides.clear();
+                // (delta, snapped pos, other point's cross-axis, own cross-axis)
+                let mut best_x: Option<(f64, f64, f64, f64)> = None;
+                let mut best_y: Option<(f64, f64, f64, f64)> = None;
+                if let Some(n) = find_node(&self.nodes, id) {
+                    for (j, c) in n.points.iter().enumerate() {
+                        if moved_idx.contains(&j) {
+                            continue;
+                        }
+                        for (_, s) in &starts {
+                            let d = c.x - (s.x + dx);
+                            if d.abs() < threshold
+                                && best_x.map_or(true, |(bd, ..)| d.abs() < bd.abs())
+                            {
+                                best_x = Some((d, c.x, c.y, s.y + dy));
+                            }
+                            let d = c.y - (s.y + dy);
+                            if d.abs() < threshold
+                                && best_y.map_or(true, |(bd, ..)| d.abs() < bd.abs())
+                            {
+                                best_y = Some((d, c.y, c.x, s.x + dx));
+                            }
+                        }
+                    }
+                }
+                dx += best_x.map_or(0.0, |b| b.0);
+                dy += best_y.map_or(0.0, |b| b.0);
+
                 if let Some(n) = find_node_mut(&mut self.nodes, id) {
-                    for &i in &sel {
-                        if let Some(a) = n.points.get_mut(i) {
-                            a.x += dx;
-                            a.y += dy;
-                            a.hx_in += dx;
-                            a.hy_in += dy;
-                            a.hx_out += dx;
-                            a.hy_out += dy;
+                    for (i, s) in &starts {
+                        if let Some(a) = n.points.get_mut(*i) {
+                            a.x = s.x + dx;
+                            a.y = s.y + dy;
+                            a.hx_in = s.hx_in + dx;
+                            a.hy_in = s.hy_in + dy;
+                            a.hx_out = s.hx_out + dx;
+                            a.hy_out = s.hy_out + dy;
                         }
                     }
                     sync_path_bounds(n);
                 }
                 recompute_group_bounds(&mut self.nodes);
+                if let Some((_, pos, oc, sc)) = best_x {
+                    self.guides.push(Guide {
+                        vertical: true,
+                        pos,
+                        from: oc.min(sc),
+                        to: oc.max(sc),
+                    });
+                }
+                if let Some((_, pos, oc, sc)) = best_y {
+                    self.guides.push(Guide {
+                        vertical: false,
+                        pos,
+                        from: oc.min(sc),
+                        to: oc.max(sc),
+                    });
+                }
             }
             PathDrag::Handle { idx, out, broken, moved } => {
                 let (idx, out, broken) = (*idx, *out, *broken);
                 *moved = true;
+
+                // Snap the handle to anchor x/y lines — most usefully its
+                // own anchor's, for flat horizontal/vertical tangents.
+                let threshold = 6.0 / self.zoom;
+                self.guides.clear();
+                let (mut hx, mut hy) = (x, y);
+                let mut gx: Option<(f64, f64)> = None; // pos, other cross-axis
+                let mut gy: Option<(f64, f64)> = None;
+                if let Some(n) = find_node(&self.nodes, id) {
+                    let (mut bx, mut by) = (threshold, threshold);
+                    for c in &n.points {
+                        let d = (c.x - x).abs();
+                        if d < bx {
+                            bx = d;
+                            hx = c.x;
+                            gx = Some((c.x, c.y));
+                        }
+                        let d = (c.y - y).abs();
+                        if d < by {
+                            by = d;
+                            hy = c.y;
+                            gy = Some((c.y, c.x));
+                        }
+                    }
+                }
+
                 if let Some(n) = find_node_mut(&mut self.nodes, id) {
                     if let Some(a) = n.points.get_mut(idx) {
                         if out {
-                            a.hx_out = x;
-                            a.hy_out = y;
+                            a.hx_out = hx;
+                            a.hy_out = hy;
                         } else {
-                            a.hx_in = x;
-                            a.hy_in = y;
+                            a.hx_in = hx;
+                            a.hy_in = hy;
                         }
                         if !broken {
                             // Keep the opposite handle collinear without
@@ -1022,9 +1104,9 @@ impl Engine {
                             let (ox, oy) =
                                 if out { (a.hx_in, a.hy_in) } else { (a.hx_out, a.hy_out) };
                             let olen = (ox - a.x).hypot(oy - a.y);
-                            let dlen = (x - a.x).hypot(y - a.y);
+                            let dlen = (hx - a.x).hypot(hy - a.y);
                             if olen > 0.0 && dlen > 0.0 {
-                                let (ux, uy) = ((x - a.x) / dlen, (y - a.y) / dlen);
+                                let (ux, uy) = ((hx - a.x) / dlen, (hy - a.y) / dlen);
                                 if out {
                                     a.hx_in = a.x - ux * olen;
                                     a.hy_in = a.y - uy * olen;
@@ -1038,6 +1120,22 @@ impl Engine {
                     sync_path_bounds(n);
                 }
                 recompute_group_bounds(&mut self.nodes);
+                if let Some((pos, oc)) = gx {
+                    self.guides.push(Guide {
+                        vertical: true,
+                        pos,
+                        from: oc.min(hy),
+                        to: oc.max(hy),
+                    });
+                }
+                if let Some((pos, oc)) = gy {
+                    self.guides.push(Guide {
+                        vertical: false,
+                        pos,
+                        from: oc.min(hx),
+                        to: oc.max(hx),
+                    });
+                }
             }
             PathDrag::Marquee { ox, oy, cx, cy } => {
                 *cx = x;
@@ -1073,6 +1171,7 @@ impl Engine {
         } else {
             self.pending_undo = None;
         }
+        self.guides.clear();
         self.touch();
     }
 

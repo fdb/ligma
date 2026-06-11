@@ -1068,6 +1068,11 @@ test("path editing: double-click to edit, drag anchors, toggle smooth, escape", 
   // Still in edit mode after a toggle.
   expect((await sceneOf(page)).pathEdit).toBe(pathId);
 
+  // Drag the anchor to 4px shy of the bottom anchor's x: it snaps on.
+  await drag(page, 340, 160, 304, 140);
+  pts = (await sceneOf(page)).nodes[0].points;
+  expect(pts[1].x).toBe(pts[2].x);
+
   // Escape leaves edit mode but keeps the path selected.
   await page.keyboard.press("Escape");
   await expect.poll(async () => (await sceneOf(page)).pathEdit).toBe(null);

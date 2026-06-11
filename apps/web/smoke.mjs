@@ -649,6 +649,33 @@ s20 = JSON.parse(e20.scene());
 assert(s20.nodes.length === 0, "a path below two anchors is deleted");
 assert(s20.pathEdit === null, "edit mode exits with its node");
 
+// Anchor snapping: a dragged anchor within 6px of a stationary anchor's
+// axis lands exactly on it; handles snap to anchor axes too.
+const e22 = new Engine();
+e22.set_tool("pen");
+for (const [px, py] of [[100, 100], [200, 100], [200, 200]]) {
+  e22.pointer_down(px, py, false, false);
+  e22.pointer_up();
+}
+e22.pen_commit();
+const pid22 = JSON.parse(e22.scene()).nodes[0].id;
+e22.enter_path_edit(pid22);
+e22.pointer_down(200, 200, false, false); // grab the last anchor
+e22.pointer_move(104, 150); // 4px off anchor 0's x -> snaps to 100
+e22.pointer_up();
+let pts22 = JSON.parse(e22.scene()).nodes[0].points;
+assert(pts22[2].x === 100 && pts22[2].y === 150, "dragged anchor snaps to a stationary x");
+
+e22.path_toggle_anchor(200, 100); // smooth the middle anchor
+e22.pointer_down(200, 100, false, false); // select it
+e22.pointer_up();
+pts22 = JSON.parse(e22.scene()).nodes[0].points;
+e22.pointer_down(pts22[1].hxOut, pts22[1].hyOut, false, false);
+e22.pointer_move(204, 40); // 4px off the anchor's own x -> vertical tangent
+e22.pointer_up();
+pts22 = JSON.parse(e22.scene()).nodes[0].points;
+assert(pts22[1].hxOut === 200 && pts22[1].hyOut === 40, "handle snaps to an anchor axis");
+
 // Exit by hand and by tool switch.
 const e21 = new Engine();
 e21.set_tool("pen");
