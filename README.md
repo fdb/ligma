@@ -98,8 +98,8 @@ floating session chat relays through the same presence room.
 
 - Frame clipping (children clip to their frame)
 - Gradients
-- Boolean path operations (flatten, union, subtract, …; pen drawing and
-  node editing already work)
-- Rich text: styling spans inside a text node
+- Pathfinder on 3+ shapes and curve-exact clipping (pairwise
+  union/subtract/intersect, flatten, and outline stroke already work)
+- Rich text: per-span font family/size/color (bold/italic spans work)
 - Components and instances
 - Multiplayer co-editing (per-operation sync; presence/saves already live)

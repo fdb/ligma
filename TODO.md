@@ -4,6 +4,7 @@
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
 - Double clicking an item in a group should select that item, allowing operations on that (e.g. resizing, editing text, and so on)
+- Hold shift while dragging to constrain proportions, e.g. while creating a new shape
 
 # DONE (things are moved here once they are done)
 
