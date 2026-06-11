@@ -2243,6 +2243,41 @@ impl Engine {
             return;
         }
         self.snapshot_now();
+        self.apply_gradient(id, index, kind, angle, stops);
+    }
+
+    /// Live gradient update during a handle drag: no undo snapshot —
+    /// wrap the gesture in begin_edit/commit_edit (same contract as
+    /// set_field_live).
+    pub fn set_paint_gradient_live(
+        &mut self,
+        id: u32,
+        index: usize,
+        kind: &str,
+        angle: f64,
+        stops_json: &str,
+    ) {
+        if !["linear", "radial"].contains(&kind) {
+            return;
+        }
+        let Ok(stops) = serde_json::from_str::<Vec<GradientStop>>(stops_json) else {
+            return;
+        };
+        if stops.len() < 2 {
+            return;
+        }
+        self.touch_doc();
+        self.apply_gradient(id, index, kind, angle, stops);
+    }
+
+    fn apply_gradient(
+        &mut self,
+        id: u32,
+        index: usize,
+        kind: &str,
+        angle: f64,
+        stops: Vec<GradientStop>,
+    ) {
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             if let Some(p) = n.fills.get_mut(index) {
                 p.kind = kind.to_string();

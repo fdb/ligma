@@ -438,6 +438,54 @@ export function CanvasView({
           </span>
         </div>
       ))}
+      {(() => {
+        // A draggable angle handle for linear-gradient fills: a spoke
+        // from the node center; dragging the dot re-aims the gradient.
+        if (scene.selection.length !== 1 || scene.pathEdit != null || overlay) return null;
+        const n = findNode(scene.nodes, scene.selection[0]);
+        const g = n?.fills[0];
+        if (!n || !g || g.kind !== "linear" || g.stops.length < 2) return null;
+        const cx = (n.x + n.w / 2) * scene.zoom + scene.panX;
+        const cy = (n.y + n.h / 2) * scene.zoom + scene.panY;
+        const rad = (g.angle * Math.PI) / 180;
+        const len = (Math.min(n.w, n.h) / 2) * scene.zoom * 0.8;
+        const hx = cx + Math.cos(rad) * len;
+        const hy = cy + Math.sin(rad) * len;
+        return (
+          <>
+            <svg className="pointer-events-none absolute inset-0 size-full">
+              <line x1={cx} y1={cy} x2={hx} y2={hy} stroke="#0ea5e9" strokeWidth="1.5" />
+            </svg>
+            <span
+              className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-sky-500 shadow"
+              style={{ left: cx, top: cy }}
+            />
+            <span
+              data-testid="gradient-handle"
+              title="Drag to aim the gradient"
+              className="absolute size-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-white bg-sky-500 shadow active:cursor-grabbing"
+              style={{ left: hx, top: hy }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                engine.begin_edit();
+              }}
+              onPointerMove={(e) => {
+                if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                const r = canvasRef.current!.getBoundingClientRect();
+                const px = e.clientX - r.left;
+                const py = e.clientY - r.top;
+                const angle = (Math.atan2(py - cy, px - cx) * 180) / Math.PI;
+                engine.set_paint_gradient_live(n.id, 0, g.kind, angle, JSON.stringify(g.stops));
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                engine.commit_edit();
+              }}
+            />
+          </>
+        );
+      })()}
       {overlay &&
         overlayNode &&
         overlay.kind === "text" &&

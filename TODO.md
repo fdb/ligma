@@ -15,6 +15,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Gradient handle on the canvas: selecting a node with a linear gradient shows a spoke from its center; dragging the dot re-aims the gradient live, coalescing into one undo step
+
 - Rich text, part 2 — span colors + floating text toolbar: while editing, a toolbar hovers above the text with B/I buttons and color dots that style the current selection (buttons keep the textarea's selection alive); colored runs render on canvas, export as tspan fills, and clear via the white dot
 
 - Radial gradient fills: the fill-type toggle cycles solid → linear → radial (center-out across the node, matching SVG paint server on export)

@@ -1007,6 +1007,25 @@ eg.set_paint_gradient(gid, 0, "conic", 0, JSON.stringify([
 ]));
 assert(JSON.parse(eg.scene()).nodes[0].fills[0].kind === "radial", "unknown gradient kinds rejected");
 
+// Live gradient updates coalesce into one undo step.
+const egl = new Engine();
+egl.set_tool("rect");
+egl.pointer_down(0, 0, false, false);
+egl.pointer_move(100, 100);
+egl.pointer_up();
+const glid = JSON.parse(egl.scene()).nodes[0].id;
+const stops = JSON.stringify([
+  { position: 0, color: "#ff0000" },
+  { position: 1, color: "#0000ff" },
+]);
+egl.set_paint_gradient(glid, 0, "linear", 0, stops);
+egl.begin_edit();
+for (let a = 1; a <= 60; a++) egl.set_paint_gradient_live(glid, 0, "linear", a, stops);
+egl.commit_edit();
+assert(JSON.parse(egl.scene()).nodes[0].fills[0].angle === 60, "live gradient angle applies");
+egl.undo();
+assert(JSON.parse(egl.scene()).nodes[0].fills[0].angle === 0, "handle drag is one undo step");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

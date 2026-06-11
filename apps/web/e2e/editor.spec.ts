@@ -1345,3 +1345,28 @@ test("text toolbar: color dots tint the selection", async ({ page }) => {
     });
   await expect.poll(redPixels).toBeGreaterThan(0);
 });
+
+test("gradient handle: dragging re-aims the linear gradient", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 300, 200, 500, 400);
+  await page.getByTestId("gradient-toggle-0").click(); // linear, 90°
+
+  const handle = page.getByTestId("gradient-handle");
+  await expect(handle).toBeVisible();
+  const hb = (await handle.boundingBox())!;
+
+  // Drag the handle from below the center (90°) to the right (≈0°).
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  const box = await canvasBox(page);
+  await page.mouse.move(box.x + 480, box.y + 300, { steps: 8 });
+  await page.mouse.up();
+
+  const angle = (await sceneOf(page)).nodes[0].fills[0].angle;
+  expect(Math.abs(angle)).toBeLessThan(10);
+
+  // One undo restores the original aim.
+  await page.keyboard.press("Meta+z");
+  expect((await sceneOf(page)).nodes[0].fills[0].angle).toBe(90);
+});
