@@ -96,7 +96,6 @@ floating session chat relays through the same presence room.
 
 ## Roadmap (Figma 1.0 scope)
 
-- Frame clipping (children clip to their frame)
 - Gradients
 - Pathfinder on 3+ shapes and curve-exact clipping (pairwise
   union/subtract/intersect, flatten, and outline stroke already work)

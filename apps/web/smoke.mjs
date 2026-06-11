@@ -933,6 +933,26 @@ assert(JSON.parse(es2.scene()).nodes[0].spans.length === 1, "spans round-trip th
 const svgT = es.export_svg(tid);
 assert(svgT.includes('<tspan font-weight="700">wo</tspan>'), "SVG export emits bold tspans");
 
+// Frame clipping: SVG wraps children in a clipPath; overhang is
+// unreachable by hit-testing (it falls outside the frame).
+const ef = new Engine();
+ef.set_tool("frame");
+ef.pointer_down(0, 0, false, false);
+ef.pointer_move(200, 200);
+ef.pointer_up();
+ef.set_tool("rect");
+ef.pointer_down(150, 50, false, false);
+ef.pointer_move(190, 90); // child centered inside the frame
+ef.pointer_up();
+const fidF = JSON.parse(ef.scene()).nodes[0].id;
+const cidF = JSON.parse(ef.scene()).nodes[0].children[0].id;
+ef.select(cidF, false);
+ef.set_field(cidF, "w", 150); // now overhangs to x=300
+const svgF = ef.export_svg(fidF);
+assert(svgF.includes("<clipPath id=") && svgF.includes("clip-path="), "frame SVG clips children");
+assert(ef.node_at(250, 70) == null, "child overhang outside the frame is not clickable");
+assert(ef.node_at(170, 70) === cidF, "child inside the frame stays clickable");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

@@ -8,6 +8,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Frame clipping: children render clipped to their frame's (rounded) bounds, on canvas and in SVG export; clipped-away overhang was already unreachable by clicks
+
 - Rich text, part 1 — bold/italic spans: select text while editing and press ⌘B/⌘I (or use the B/I buttons in the Text panel for the whole node); style runs merge and split cleanly, render with real font variants on canvas, export as SVG tspans, persist with the document, and clamp when the text changes
 
 - Outline stroke (right-click or Object menu): converts a shape's stroke into a filled even-odd ring path (mitered offsets of the closed outline, bevels at spikes); a filled body stays underneath, a stroke-only shape is replaced

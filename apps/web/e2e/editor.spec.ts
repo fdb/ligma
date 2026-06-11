@@ -1228,3 +1228,30 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
     .poll(async () => (await sceneOf(page)).nodes[0].spans)
     .toEqual([{ start: 0, len: 4, bold: false, italic: true }]);
 });
+
+test("frames clip their children's rendering", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 200, 400, 400);
+  await page.keyboard.press("r");
+  await drag(page, 300, 250, 380, 330); // child inside the frame
+
+  // Stretch the child far past the frame's right edge.
+  const wField = page.locator("label", { hasText: "W" }).locator("input");
+  await wField.fill("400");
+  await wField.press("Enter");
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // Inside the frame the child shows; past the frame edge it's clipped
+  // to the canvas background.
+  await expect.poll(() => pixelAt(390, 290)).toEqual([212, 212, 216]);
+  await expect.poll(() => pixelAt(450, 290)).toEqual([233, 233, 236]);
+});

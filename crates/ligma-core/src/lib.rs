@@ -3608,9 +3608,14 @@ fn draw_node(
             stroke_paints(ctx, n, alpha, |ctx| {
                 rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
             });
+            // Children clip to the frame, Figma-style.
+            ctx.save();
+            rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
+            ctx.clip();
             for c in &n.children {
                 draw_node(ctx, c, alpha, zoom, layouts);
             }
+            ctx.restore();
         }
         NodeKind::Rect => {
             for p in &n.fills {
@@ -3893,8 +3898,19 @@ fn svg_node(
                     n.w, n.h, xml_escape(&p.color), p.opacity, n.stroke_weight
                 ));
             }
-            for c in &n.children {
-                svg_node(c, ox, oy, out, layouts);
+            if n.kind == NodeKind::Frame && !n.children.is_empty() {
+                out.push_str(&format!(
+                    r#"<clipPath id="clip{id}"><rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr}/></clipPath><g clip-path="url(#clip{id})">"#,
+                    n.w, n.h, id = n.id
+                ));
+                for c in &n.children {
+                    svg_node(c, ox, oy, out, layouts);
+                }
+                out.push_str("</g>");
+            } else {
+                for c in &n.children {
+                    svg_node(c, ox, oy, out, layouts);
+                }
             }
         }
         NodeKind::Ellipse => {
