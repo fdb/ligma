@@ -74,6 +74,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 | `⌘G` / `⇧⌘G` / `⌥⌘G` | Group / ungroup / frame selection |
 | `⌘E` | Flatten selection into one path (overlaps become holes) |
+| `⌥⌘K` | Create a component from the selection (Object ▸ Create instance places copies) |
 | `⌘C` `⌘X` `⌘V` | Copy, cut, paste (engine clipboard; pastes cascade) |
 | `⌘]` / `⌘[` | Bring to front / send to back |
 | `⌘D`, `⌫`, arrows | Duplicate, delete, nudge (`⇧` = 10px) |
@@ -99,5 +100,5 @@ floating session chat relays through the same presence room.
 - Pathfinder on 3+ shapes and curve-exact clipping (pairwise
   union/subtract/intersect, flatten, and outline stroke already work)
 - Rich text: per-span font family/size/color (bold/italic spans work)
-- Components and instances
+- Component overrides (per-instance text/fill changes; live masters work)
 - Multiplayer co-editing (per-operation sync; presence/saves already live)

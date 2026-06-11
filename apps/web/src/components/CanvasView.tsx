@@ -128,6 +128,9 @@ export function CanvasView({
       } else if (mod && e.key.toLowerCase() === "e") {
         e.preventDefault();
         engine.flatten_selection();
+      } else if (mod && e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        engine.create_component();
       } else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         onSave();
@@ -337,6 +340,18 @@ export function CanvasView({
         label: "Outline stroke",
         disabled: !some,
         action: () => engine.outline_stroke(),
+      },
+      "---",
+      {
+        label: "Create component",
+        shortcut: "⌥⌘K",
+        disabled: !some,
+        action: () => engine.create_component(),
+      },
+      {
+        label: "Create instance",
+        disabled: sel.length !== 1 || first?.kind !== "component",
+        action: () => engine.create_instance(),
       },
       "---",
       {

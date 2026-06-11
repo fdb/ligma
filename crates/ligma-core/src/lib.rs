@@ -29,6 +29,8 @@ pub enum NodeKind {
     Text,
     Image,
     Path,
+    Component,
+    Instance,
 }
 
 /// A path anchor point with its bezier control handles. Everything is in
@@ -210,6 +212,9 @@ pub struct Node {
     /// Styled runs in `text` (text nodes only).
     #[serde(default)]
     pub spans: Vec<Span>,
+    /// Master component id (instance nodes only).
+    #[serde(default)]
+    pub component: u32,
     #[serde(default)]
     pub export_presets: Vec<ExportPreset>,
     #[serde(default)]
@@ -721,7 +726,9 @@ fn ellipse_contour(x: f64, y: f64, w: f64, h: f64) -> Vec<Anchor> {
 /// text and images have no vector outline and contribute nothing).
 fn collect_contours(n: &Node, out: &mut Vec<Vec<Anchor>>) {
     match n.kind {
-        NodeKind::Rect | NodeKind::Frame => out.push(rect_contour(n.x, n.y, n.w, n.h, n.corner_radius)),
+        NodeKind::Rect | NodeKind::Frame | NodeKind::Component | NodeKind::Instance => {
+            out.push(rect_contour(n.x, n.y, n.w, n.h, n.corner_radius))
+        }
         NodeKind::Ellipse => out.push(ellipse_contour(n.x, n.y, n.w, n.h)),
         NodeKind::Path => {
             out.push(n.points.clone());
@@ -1103,6 +1110,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             closed: false,
             inner: Vec::new(),
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children: Vec::new(),
         })
@@ -1317,7 +1325,7 @@ impl Engine {
                 .iter()
                 .rev()
                 .find(|f| {
-                    f.kind == NodeKind::Frame
+                    matches!(f.kind, NodeKind::Frame | NodeKind::Component)
                         && f.id != id
                         && f.visible
                         && !f.locked
@@ -1965,7 +1973,7 @@ impl Engine {
                         .iter()
                         .rev()
                         .find(|f| {
-                            f.kind == NodeKind::Frame
+                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
                                 && f.id != id
                                 && f.visible
                                 && !f.locked
@@ -2483,6 +2491,7 @@ impl Engine {
             closed: false,
             inner: Vec::new(),
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children,
         };
@@ -2587,6 +2596,7 @@ impl Engine {
             closed: true,
             inner: contours,
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children: Vec::new(),
         };
@@ -2685,6 +2695,7 @@ impl Engine {
             closed: true,
             inner: out.into_iter().map(to_anchors).collect(),
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children: Vec::new(),
         };
@@ -2769,7 +2780,8 @@ impl Engine {
                 points: to_anchors(&outer),
                 closed: true,
                 inner: vec![to_anchors(&inner)],
-            spans: Vec::new(),
+                spans: Vec::new(),
+                component: 0,
                 export_presets: Vec::new(),
                 children: Vec::new(),
             };
@@ -2799,6 +2811,38 @@ impl Engine {
     /// Wraps the selection in a new frame sized to its bounding box.
     /// All selected nodes must share a parent list (like grouping).
     pub fn frame_selection(&mut self) {
+        self.wrap_selection(NodeKind::Frame);
+    }
+
+    /// Converts the selection into a component (a reusable master).
+    pub fn create_component(&mut self) {
+        self.wrap_selection(NodeKind::Component);
+    }
+
+    /// Places an instance of the selected component beside it.
+    pub fn create_instance(&mut self) {
+        if self.selection.len() != 1 {
+            return;
+        }
+        let Some(m) = find_node(&self.nodes, self.selection[0]) else {
+            return;
+        };
+        if m.kind != NodeKind::Component {
+            return;
+        }
+        let (mid, mx, my, mw, mh, mname) = (m.id, m.x, m.y, m.w, m.h, m.name.clone());
+        self.snapshot_now();
+        let id = self.add_node(NodeKind::Instance, mx + mw + 24.0, my, mw, mh);
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            n.component = mid;
+            n.name = mname;
+            n.fills.clear(); // the master paints the instance
+        }
+        self.selection = vec![id];
+        self.touch();
+    }
+
+    fn wrap_selection(&mut self, kind: NodeKind) {
         if self.selection.is_empty() {
             return;
         }
@@ -2834,10 +2878,16 @@ impl Engine {
 
         let id = self.next_id;
         self.next_id += 1;
+        let name = match kind {
+            NodeKind::Component => {
+                format!("Component {}", count_kind(&self.nodes, NodeKind::Component) + 1)
+            }
+            _ => format!("Frame {}", count_kind(&self.nodes, NodeKind::Frame) + 1),
+        };
         let frame = Node {
             id,
-            name: format!("Frame {}", count_kind(&self.nodes, NodeKind::Frame) + 1),
-            kind: NodeKind::Frame,
+            name,
+            kind,
             x: bx,
             y: by,
             w: bx2 - bx,
@@ -2860,6 +2910,7 @@ impl Engine {
             closed: false,
             inner: Vec::new(),
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children,
         };
@@ -3063,7 +3114,7 @@ impl Engine {
         }
         if parent != 0 {
             match find_node(&self.nodes, parent) {
-                Some(p) if matches!(p.kind, NodeKind::Frame | NodeKind::Group) => {}
+                Some(p) if matches!(p.kind, NodeKind::Frame | NodeKind::Group | NodeKind::Component) => {}
                 _ => return,
             }
         }
@@ -3219,7 +3270,7 @@ impl Engine {
     pub fn render_export(&self, ctx: &CanvasRenderingContext2d, id: u32, scale: f64) {
         if let Some(n) = find_node(&self.nodes, id) {
             let _ = ctx.set_transform(scale, 0.0, 0.0, scale, -n.x * scale, -n.y * scale);
-            draw_node(ctx, n, 1.0, scale, &self.text_layouts);
+            draw_node(ctx, n, 1.0, scale, &self.text_layouts, &self.nodes, 0);
         }
     }
 
@@ -3233,7 +3284,7 @@ impl Engine {
             w = n.w,
             h = n.h
         );
-        svg_node(n, -n.x, -n.y, &mut out, &self.text_layouts.borrow());
+        svg_node(n, -n.x, -n.y, &mut out, &self.text_layouts.borrow(), &self.nodes, 0);
         out.push_str("</svg>");
         out
     }
@@ -3277,7 +3328,7 @@ impl Engine {
             if self.editing == Some(n.id) && n.kind == NodeKind::Text {
                 continue;
             }
-            draw_node(ctx, n, 1.0, self.zoom, &self.text_layouts);
+            draw_node(ctx, n, 1.0, self.zoom, &self.text_layouts, &self.nodes, 0);
         }
         ctx.set_global_alpha(1.0);
 
@@ -3470,7 +3521,7 @@ impl Engine {
             if !n.visible || n.locked || !self.node_hit(n, x, y) {
                 continue;
             }
-            if n.kind == NodeKind::Frame {
+            if matches!(n.kind, NodeKind::Frame | NodeKind::Component) {
                 if let Some(c) = n
                     .children
                     .iter()
@@ -3624,6 +3675,8 @@ impl Engine {
             NodeKind::Text => (format!("Text {count}"), "#18181b"),
             NodeKind::Image => (format!("Image {count}"), "#f4f4f5"),
             NodeKind::Path => (format!("Path {count}"), "#d4d4d8"),
+            NodeKind::Component => (format!("Component {count}"), "#ffffff"),
+            NodeKind::Instance => (format!("Instance {count}"), "#ffffff"),
         };
         self.nodes.push(Node {
             id,
@@ -3651,6 +3704,7 @@ impl Engine {
             closed: false,
             inner: Vec::new(),
             spans: Vec::new(),
+            component: 0,
             export_presets: Vec::new(),
             children: Vec::new(),
         });
@@ -3701,6 +3755,8 @@ fn draw_node(
     parent_alpha: f64,
     zoom: f64,
     layouts: &RefCell<HashMap<u32, Vec<String>>>,
+    root: &[Node],
+    depth: u32,
 ) {
     if !n.visible {
         return;
@@ -3713,10 +3769,40 @@ fn draw_node(
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom, layouts);
+                draw_node(ctx, c, alpha, zoom, layouts, root, depth);
             }
         }
-        NodeKind::Frame => {
+        NodeKind::Instance => {
+            // Draw the master mapped onto the instance box. The depth cap
+            // breaks reference cycles (an instance dragged into its own
+            // master) instead of recursing forever.
+            let master = find_node(root, n.component)
+                .filter(|m| m.kind == NodeKind::Component && depth < 8);
+            match master {
+                Some(m) => {
+                    ctx.save();
+                    let fx = if m.w > 0.0 { n.w / m.w } else { 1.0 };
+                    let fy = if m.h > 0.0 { n.h / m.h } else { 1.0 };
+                    let _ = ctx.translate(n.x - m.x * fx, n.y - m.y * fy);
+                    let _ = ctx.scale(fx, fy);
+                    draw_node(ctx, m, alpha, zoom, layouts, root, depth + 1);
+                    ctx.restore();
+                }
+                None => {
+                    ctx.set_global_alpha(alpha);
+                    ctx.set_fill_style_str("#f4f4f5");
+                    ctx.fill_rect(n.x, n.y, n.w, n.h);
+                    ctx.set_stroke_style_str("#d4d4d8");
+                    ctx.set_line_width(1.0 / zoom);
+                    ctx.stroke_rect(n.x, n.y, n.w, n.h);
+                    ctx.begin_path();
+                    ctx.move_to(n.x, n.y);
+                    ctx.line_to(n.x + n.w, n.y + n.h);
+                    ctx.stroke();
+                }
+            }
+        }
+        NodeKind::Component | NodeKind::Frame => {
             ctx.set_shadow_color("rgba(24, 24, 27, 0.10)");
             ctx.set_shadow_blur(3.0);
             ctx.set_shadow_offset_y(1.0);
@@ -3737,7 +3823,7 @@ fn draw_node(
             rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
             ctx.clip();
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom, layouts);
+                draw_node(ctx, c, alpha, zoom, layouts, root, depth);
             }
             ctx.restore();
         }
@@ -4061,6 +4147,8 @@ fn svg_node(
     oy: f64,
     out: &mut String,
     layouts: &HashMap<u32, Vec<String>>,
+    root: &[Node],
+    depth: u32,
 ) {
     if !n.visible {
         return;
@@ -4076,10 +4164,25 @@ fn svg_node(
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
-                svg_node(c, ox, oy, out, layouts);
+                svg_node(c, ox, oy, out, layouts, root, depth);
             }
         }
-        NodeKind::Frame | NodeKind::Rect => {
+        NodeKind::Instance => {
+            if let Some(m) = find_node(root, n.component)
+                .filter(|m| m.kind == NodeKind::Component && depth < 8)
+            {
+                let fx = if m.w > 0.0 { n.w / m.w } else { 1.0 };
+                let fy = if m.h > 0.0 { n.h / m.h } else { 1.0 };
+                out.push_str(&format!(
+                    r#"<g transform="translate({} {}) scale({fx} {fy})">"#,
+                    x - m.x * fx,
+                    y - m.y * fy
+                ));
+                svg_node(m, 0.0, 0.0, out, layouts, root, depth + 1);
+                out.push_str("</g>");
+            }
+        }
+        NodeKind::Component | NodeKind::Frame | NodeKind::Rect => {
             let rx = n.corner_radius.min(n.w / 2.0).min(n.h / 2.0);
             let rx_attr = if rx > 0.0 { format!(r#" rx="{rx}""#) } else { String::new() };
             for (pi, p) in n.fills.iter().enumerate() {
@@ -4095,18 +4198,18 @@ fn svg_node(
                     n.w, n.h, xml_escape(&p.color), p.opacity, n.stroke_weight
                 ));
             }
-            if n.kind == NodeKind::Frame && !n.children.is_empty() {
+            if matches!(n.kind, NodeKind::Frame | NodeKind::Component) && !n.children.is_empty() {
                 out.push_str(&format!(
                     r#"<clipPath id="clip{id}"><rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr}/></clipPath><g clip-path="url(#clip{id})">"#,
                     n.w, n.h, id = n.id
                 ));
                 for c in &n.children {
-                    svg_node(c, ox, oy, out, layouts);
+                    svg_node(c, ox, oy, out, layouts, root, depth);
                 }
                 out.push_str("</g>");
             } else {
                 for c in &n.children {
-                    svg_node(c, ox, oy, out, layouts);
+                    svg_node(c, ox, oy, out, layouts, root, depth);
                 }
             }
         }

@@ -210,6 +210,18 @@ export function TopBar({
           action: () => engine.outline_stroke(),
         },
         "---",
+        {
+          label: "Create component",
+          shortcut: "⌥⌘K",
+          disabled: scene.selection.length === 0,
+          action: () => engine.create_component(),
+        },
+        {
+          label: "Create instance",
+          disabled: scene.selection.length !== 1,
+          action: () => engine.create_instance(),
+        },
+        "---",
         align("left"),
         align("hcenter"),
         align("right"),

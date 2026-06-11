@@ -1370,3 +1370,50 @@ test("gradient handle: dragging re-aims the linear gradient", async ({ page }) =
   await page.keyboard.press("Meta+z");
   expect((await sceneOf(page)).nodes[0].fills[0].angle).toBe(90);
 });
+
+test("components: create master, place instance, master edits propagate", async ({ page }) => {
+  const id = await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 250, 250, 350, 350);
+  await page.keyboard.press("Alt+Meta+k");
+  await expect(layers(page).getByText("Component 1")).toBeVisible();
+
+  // Select the master via its outliner row (clicking the canvas would
+  // hit the child rect), then place an instance from the Object menu.
+  await layers(page).getByText("Component 1").click();
+  await page.getByRole("button", { name: "Object" }).click();
+  await page.getByRole("button", { name: "Create instance" }).click();
+  let s = await sceneOf(page);
+  expect(s.nodes.map((n: any) => n.kind)).toEqual(["component", "instance"]);
+  const inst = s.nodes[1];
+  expect(inst.component).toBe(s.nodes[0].id);
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+  // The instance mirrors the master's gray rect at +124px.
+  await expect.poll(() => pixelAt(424, 300)).toEqual([212, 212, 216]);
+
+  // Recolor the rect inside the master: the instance follows live.
+  await page.evaluate(() => {
+    const e = (window as any).__engine;
+    const s = JSON.parse(e.scene());
+    e.update_paint(s.nodes[0].children[0].id, "fills", 0, "#ff0000", 1);
+  });
+  await expect.poll(() => pixelAt(424, 300)).toEqual([255, 0, 0]);
+
+  // Persists through save + reload.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.goto(`/d/${id}`);
+  // Master and instance share the name, so two rows match.
+  await expect(layers(page).getByText("Component 1")).toHaveCount(2);
+  await expect
+    .poll(async () => (await sceneOf(page)).nodes.map((n: any) => n.kind))
+    .toEqual(["component", "instance"]);
+});

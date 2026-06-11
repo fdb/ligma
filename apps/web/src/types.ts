@@ -1,4 +1,13 @@
-export type NodeKind = "frame" | "group" | "rect" | "ellipse" | "text" | "image" | "path";
+export type NodeKind =
+  | "frame"
+  | "group"
+  | "rect"
+  | "ellipse"
+  | "text"
+  | "image"
+  | "path"
+  | "component"
+  | "instance";
 
 export type Tool = "select" | "frame" | "rect" | "ellipse" | "text" | "pen" | "hand";
 
@@ -58,6 +67,8 @@ export interface SceneNode {
   inner: PathAnchor[][];
   /** Styled runs in `text` (char offsets; text nodes only). */
   spans: { start: number; len: number; bold: boolean; italic: boolean; color: string }[];
+  /** Master component id (instance nodes only). */
+  component: number;
   exportPresets: ExportPreset[];
   children: SceneNode[];
 }

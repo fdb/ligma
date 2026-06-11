@@ -54,7 +54,8 @@ function LayerRow({
   const selected = scene.selection.includes(node.id);
   const hovered = scene.hovered === node.id;
   const isGroup = node.children.length > 0;
-  const isContainer = node.kind === "frame" || node.kind === "group";
+  const isContainer =
+    node.kind === "frame" || node.kind === "group" || node.kind === "component";
   const open = expanded.has(node.id);
   const hint = dropHint?.id === node.id ? dropHint.zone : null;
 

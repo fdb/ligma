@@ -1026,6 +1026,74 @@ assert(JSON.parse(egl.scene()).nodes[0].fills[0].angle === 60, "live gradient an
 egl.undo();
 assert(JSON.parse(egl.scene()).nodes[0].fills[0].angle === 0, "handle drag is one undo step");
 
+// Components & instances: master renders into instances by reference.
+const ec = new Engine();
+ec.set_tool("rect");
+ec.pointer_down(100, 100, false, false);
+ec.pointer_move(200, 180);
+ec.pointer_up();
+const rcid = JSON.parse(ec.scene()).nodes[0].id;
+ec.select(rcid, false);
+ec.create_component();
+let sc = JSON.parse(ec.scene());
+assert(sc.nodes.length === 1 && sc.nodes[0].kind === "component", "create_component wraps the selection");
+const comp = sc.nodes[0];
+assert(comp.children.length === 1 && comp.children[0].id === rcid, "the rect nests inside the master");
+assert(comp.x === 100 && comp.w === 100, "master takes the selection bbox");
+
+ec.create_instance();
+sc = JSON.parse(ec.scene());
+assert(sc.nodes.length === 2 && sc.nodes[1].kind === "instance", "create_instance adds an instance");
+const inst = sc.nodes[1];
+assert(inst.component === comp.id, "instance references its master");
+assert(inst.x === comp.x + comp.w + 24, "instance lands beside the master");
+assert(sc.selection[0] === inst.id, "the new instance is selected");
+
+// The instance's SVG embeds the master subtree under a transform.
+const isvg = ec.export_svg(inst.id);
+assert(isvg.includes("<g transform=") && isvg.includes("<rect"), "instance SVG embeds the master");
+
+// Editing the master shows up in the instance's export.
+ec.update_paint(rcid, "fills", 0, "#ff0000", 1);
+assert(ec.export_svg(inst.id).includes('fill="#ff0000"'), "master edits propagate to instances");
+
+// Resizing the instance scales the embedded master.
+ec.select(inst.id, false);
+ec.set_field(inst.id, "w", 200);
+const isvg2 = ec.export_svg(inst.id);
+assert(isvg2.includes("scale(2 1)"), "instance resize scales the mapping");
+
+// Deleting the master leaves the instance rendering a placeholder (no crash).
+ec.select(comp.id, false);
+ec.delete_selection();
+sc = JSON.parse(ec.scene());
+assert(sc.nodes.length === 1 && sc.nodes[0].kind === "instance", "instance survives master deletion");
+assert(ec.export_svg(sc.nodes[0].id).length > 0, "orphan instance still exports");
+
+// create_instance refuses non-components.
+const ec2 = new Engine();
+ec2.set_tool("rect");
+ec2.pointer_down(0, 0, false, false);
+ec2.pointer_up();
+ec2.create_instance();
+assert(JSON.parse(ec2.scene()).nodes.length === 1, "create_instance is a no-op on plain shapes");
+
+// Components persist through JSON.
+const ec3 = new Engine();
+ec3.set_tool("rect");
+ec3.pointer_down(0, 0, false, false);
+ec3.pointer_move(50, 50);
+ec3.pointer_up();
+ec3.create_component();
+ec3.create_instance();
+const ec3b = new Engine();
+ec3b.load_json(ec3.to_json());
+const sc3 = JSON.parse(ec3b.scene());
+assert(
+  sc3.nodes[0].kind === "component" && sc3.nodes[1].kind === "instance" && sc3.nodes[1].component === sc3.nodes[0].id,
+  "components round-trip through JSON",
+);
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

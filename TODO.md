@@ -12,8 +12,11 @@
 - You can also drag the sides of an item to change the width/height, not just the corner points
 - Dragging the corner points should also snap to the frame (e.g. to snap the width to the width of the frame)
 - If you start typing in a text item, it will still display the previous text, so the two texts will overlap until you press enter or escape
+- BUG: Resizing a frame doesn't resize objects in the frame or change their positions! Note that once an item is in a frame, its position will be relative to the position in the frame, starting from the top left. Same with groups.
 
 # DONE (things are moved here once they are done)
+
+- Components & instances: ⌥⌘K turns the selection into a component (a frame-like master); "Create instance" places a live instance beside it that renders the master by reference — master edits show up in every instance immediately, instances resize by scaling the mapping, SVG export embeds the transformed master, and a deleted master leaves a placeholder
 
 - Gradient handle on the canvas: selecting a node with a linear gradient shows a spoke from its center; dragging the dot re-aims the gradient live, coalescing into one undo step
 
