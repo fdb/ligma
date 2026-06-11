@@ -960,14 +960,14 @@ eg.pointer_down(0, 0, false, false);
 eg.pointer_move(200, 100);
 eg.pointer_up();
 const gid = JSON.parse(eg.scene()).nodes[0].id;
-eg.set_paint_gradient(gid, 0, 45, JSON.stringify([
+eg.set_paint_gradient(gid, 0, "linear", 45, JSON.stringify([
   { position: 0, color: "#ff0000" },
   { position: 1, color: "#0000ff" },
 ]));
 let gp = JSON.parse(eg.scene()).nodes[0].fills[0];
 assert(gp.kind === "linear" && gp.stops.length === 2 && gp.angle === 45, "gradient applies");
 assert(gp.color === "#ff0000", "swatch fallback tracks the first stop");
-eg.set_paint_gradient(gid, 0, 0, JSON.stringify([{ position: 0, color: "#fff" }]));
+eg.set_paint_gradient(gid, 0, "linear", 0, JSON.stringify([{ position: 0, color: "#fff" }]));
 assert(JSON.parse(eg.scene()).nodes[0].fills[0].stops.length === 2, "single-stop input rejected");
 const gsvg = eg.export_svg(gid);
 assert(gsvg.includes("<linearGradient id=") && gsvg.includes('fill="url(#'), "SVG emits a paint server");
@@ -980,6 +980,20 @@ gp = JSON.parse(eg.scene()).nodes[0].fills[0];
 assert(gp.kind === "solid" && gp.stops.length === 0, "picking a flat color reverts to solid");
 eg.undo();
 assert(JSON.parse(eg.scene()).nodes[0].fills[0].kind === "linear", "solid revert is undoable");
+
+// Radial: kind round-trips and SVG emits a radialGradient circle.
+eg.set_paint_gradient(gid, 0, "radial", 0, JSON.stringify([
+  { position: 0, color: "#ff0000" },
+  { position: 1, color: "#0000ff" },
+]));
+assert(JSON.parse(eg.scene()).nodes[0].fills[0].kind === "radial", "radial kind applies");
+const rsvg = eg.export_svg(gid);
+assert(rsvg.includes("<radialGradient id=") && rsvg.includes('gradientUnits="userSpaceOnUse"'), "SVG emits a radial paint server");
+eg.set_paint_gradient(gid, 0, "conic", 0, JSON.stringify([
+  { position: 0, color: "#fff" },
+  { position: 1, color: "#000" },
+]));
+assert(JSON.parse(eg.scene()).nodes[0].fills[0].kind === "radial", "unknown gradient kinds rejected");
 
 // Camera.
 e.wheel(0, -100, true, 400, 300);

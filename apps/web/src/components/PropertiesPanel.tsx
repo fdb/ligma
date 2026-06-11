@@ -54,9 +54,13 @@ function PaintRow({
     engine.update_paint(nodeId, kind, index, color, opacity);
   const [pickerOpen, setPickerOpen] = useState(false);
   const swatchRef = useRef<HTMLButtonElement>(null);
-  const isLinear = paint.kind === "linear" && paint.stops.length >= 2;
-  const setGradient = (angle: number, stops: { position: number; color: string }[]) =>
-    engine.set_paint_gradient(nodeId, index, angle, JSON.stringify(stops));
+  const isGradient =
+    (paint.kind === "linear" || paint.kind === "radial") && paint.stops.length >= 2;
+  const setGradient = (
+    gkind: string,
+    angle: number,
+    stops: { position: number; color: string }[],
+  ) => engine.set_paint_gradient(nodeId, index, gkind, angle, JSON.stringify(stops));
 
   return (
     <>
@@ -71,10 +75,14 @@ function PaintRow({
         <span
           className="block size-full rounded-[4px]"
           style={{
-            background: isLinear
-              ? `linear-gradient(${paint.angle + 90}deg, ${paint.stops
-                  .map((s) => `${s.color} ${s.position * 100}%`)
-                  .join(", ")})`
+            background: isGradient
+              ? paint.kind === "radial"
+                ? `radial-gradient(circle, ${paint.stops
+                    .map((s) => `${s.color} ${s.position * 100}%`)
+                    .join(", ")})`
+                : `linear-gradient(${paint.angle + 90}deg, ${paint.stops
+                    .map((s) => `${s.color} ${s.position * 100}%`)
+                    .join(", ")})`
               : paint.color,
           }}
         />
@@ -126,21 +134,32 @@ function PaintRow({
       </div>
       {kind === "fills" && (
         <button
-          title={isLinear ? "Switch to solid" : "Switch to linear gradient"}
-          data-testid={`gradient-toggle-${index}`}
-          onClick={() =>
-            isLinear
-              ? update(paint.stops[0].color, paint.opacity)
-              : setGradient(90, [
-                  { position: 0, color: paint.color },
-                  { position: 1, color: "#ffffff" },
-                ])
+          title={
+            !isGradient
+              ? "Switch to linear gradient"
+              : paint.kind === "linear"
+                ? "Switch to radial gradient"
+                : "Switch to solid"
           }
+          data-testid={`gradient-toggle-${index}`}
+          onClick={() => {
+            // Cycle: solid → linear → radial → solid.
+            if (!isGradient) {
+              setGradient("linear", 90, [
+                { position: 0, color: paint.color },
+                { position: 1, color: "#ffffff" },
+              ]);
+            } else if (paint.kind === "linear") {
+              setGradient("radial", paint.angle, paint.stops);
+            } else {
+              update(paint.stops[0].color, paint.opacity);
+            }
+          }}
           className={`flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${
-            isLinear ? "bg-sky-50 text-sky-600" : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+            isGradient ? "bg-sky-50 text-sky-600" : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
           }`}
         >
-          ◧
+          {paint.kind === "radial" ? "◉" : "◧"}
         </button>
       )}
       <button
@@ -151,7 +170,7 @@ function PaintRow({
         <Icon name="minus" size={12} />
       </button>
     </div>
-    {isLinear && (
+    {isGradient && (
       <div className="mb-1.5 flex items-center gap-1.5 pl-8">
         {paint.stops.slice(0, 2).map((s, si) => (
           <div
@@ -169,7 +188,7 @@ function PaintRow({
                 const stops = paint.stops.map((p, i) =>
                   i === si ? { ...p, color: `#${hex.toLowerCase()}` } : p,
                 );
-                setGradient(paint.angle, stops);
+                setGradient(paint.kind, paint.angle, stops);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") e.currentTarget.blur();
@@ -187,7 +206,7 @@ function PaintRow({
             onFocus={(e) => e.currentTarget.select()}
             onBlur={(e) => {
               const v = parseFloat(e.currentTarget.value);
-              if (!Number.isNaN(v)) setGradient(v, paint.stops);
+              if (!Number.isNaN(v)) setGradient(paint.kind, v, paint.stops);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") e.currentTarget.blur();

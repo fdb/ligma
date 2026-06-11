@@ -10,9 +10,12 @@
 - Custom color picker should also have "document colors" - colors that appear on this document, sorted by most frequently used
 - If a frame is empty dragging inside of a frame drags the frame. if it has one item, dragging inside of it will create a drag selection rectangle to select items of the frame
 - You can also drag the sides of an item to change the width/height, not just the corner points
+- Dragging the corner points should also snap to the frame (e.g. to snap the width to the width of the frame)
+- If you start typing in a text item, it will still display the previous text, so the two texts will overlap until you press enter or escape
 
 # DONE (things are moved here once they are done)
 
+- Radial gradient fills: the fill-type toggle cycles solid → linear → radial (center-out across the node, matching SVG paint server on export)
 - Linear gradient fills: toggle any fill between solid and a linear gradient (stop hex inputs + angle in the panel, gradient preview in the swatch); rendered across the node's bounding box on canvas and as an SVG paint server, persisted with the document; picking a flat color reverts to solid
 
 - Frame clipping: children render clipped to their frame's (rounded) bounds, on canvas and in SVG export; clipped-away overhang was already unreachable by clicks

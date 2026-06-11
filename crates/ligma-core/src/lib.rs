@@ -2211,9 +2211,20 @@ impl Engine {
         self.touch();
     }
 
-    /// Turns fills[index] into a linear gradient. `stops_json` is a JSON
-    /// array of { position, color }; fewer than two stops are rejected.
-    pub fn set_paint_gradient(&mut self, id: u32, index: usize, angle: f64, stops_json: &str) {
+    /// Turns fills[index] into a gradient ("linear" or "radial").
+    /// `stops_json` is a JSON array of { position, color }; fewer than
+    /// two stops are rejected.
+    pub fn set_paint_gradient(
+        &mut self,
+        id: u32,
+        index: usize,
+        kind: &str,
+        angle: f64,
+        stops_json: &str,
+    ) {
+        if !["linear", "radial"].contains(&kind) {
+            return;
+        }
         let Ok(stops) = serde_json::from_str::<Vec<GradientStop>>(stops_json) else {
             return;
         };
@@ -2223,7 +2234,7 @@ impl Engine {
         self.snapshot_now();
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             if let Some(p) = n.fills.get_mut(index) {
-                p.kind = "linear".to_string();
+                p.kind = kind.to_string();
                 p.angle = angle;
                 p.color = stops[0].color.clone();
                 p.stops = stops;
@@ -3816,7 +3827,18 @@ fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_w: f64) -> Vec<Stri
 /// Sets the context fill style for a paint: solid color, or a linear
 /// gradient spanning the node's bounding box at the paint's angle.
 fn apply_fill(ctx: &CanvasRenderingContext2d, p: &Paint, x: f64, y: f64, w: f64, h: f64) {
-    if p.kind == "linear" && p.stops.len() >= 2 {
+    if p.kind == "radial" && p.stops.len() >= 2 {
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let r = (w.max(h)) / 2.0;
+        if let Ok(g) = ctx.create_radial_gradient(cx, cy, 0.0, cx, cy, r.max(0.01)) {
+            for s in &p.stops {
+                let _ = g.add_color_stop(s.position.clamp(0.0, 1.0) as f32, &s.color);
+            }
+            ctx.set_fill_style_canvas_gradient(&g);
+            return;
+        }
+        ctx.set_fill_style_str(&p.color);
+    } else if p.kind == "linear" && p.stops.len() >= 2 {
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let rad = p.angle.to_radians();
         let (dx, dy) = (rad.cos(), rad.sin());
@@ -3910,9 +3932,26 @@ fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, 
 
 /// Emits a paint server for gradient paints (returns the fill value).
 /// Solid paints just return their escaped color.
-fn svg_fill(p: &Paint, uid: &str, out: &mut String) -> String {
-    if p.kind != "linear" || p.stops.len() < 2 {
+fn svg_fill(p: &Paint, uid: &str, out: &mut String, x: f64, y: f64, w: f64, h: f64) -> String {
+    if !["linear", "radial"].contains(&p.kind.as_str()) || p.stops.len() < 2 {
         return xml_escape(&p.color);
+    }
+    if p.kind == "radial" {
+        out.push_str(&format!(
+            r#"<radialGradient id="{uid}" gradientUnits="userSpaceOnUse" cx="{}" cy="{}" r="{}">"#,
+            x + w / 2.0,
+            y + h / 2.0,
+            (w.max(h)) / 2.0
+        ));
+        for s in &p.stops {
+            out.push_str(&format!(
+                r#"<stop offset="{}" stop-color="{}"/>"#,
+                s.position.clamp(0.0, 1.0),
+                xml_escape(&s.color)
+            ));
+        }
+        out.push_str("</radialGradient>");
+        return format!("url(#{uid})");
     }
     let rad = p.angle.to_radians();
     let (dx, dy) = (rad.cos() / 2.0, rad.sin() / 2.0);
@@ -3987,7 +4026,7 @@ fn svg_node(
             let rx = n.corner_radius.min(n.w / 2.0).min(n.h / 2.0);
             let rx_attr = if rx > 0.0 { format!(r#" rx="{rx}""#) } else { String::new() };
             for (pi, p) in n.fills.iter().enumerate() {
-                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out, x, y, n.w, n.h);
                 out.push_str(&format!(
                     r#"<rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr} fill="{fill}" fill-opacity="{}"/>"#,
                     n.w, n.h, p.opacity
@@ -4017,7 +4056,7 @@ fn svg_node(
         NodeKind::Ellipse => {
             let (cx, cy, rx, ry) = (x + n.w / 2.0, y + n.h / 2.0, n.w / 2.0, n.h / 2.0);
             for (pi, p) in n.fills.iter().enumerate() {
-                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out, x, y, n.w, n.h);
                 out.push_str(&format!(
                     r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}" fill-opacity="{}"/>"#,
                     p.opacity
@@ -4081,7 +4120,7 @@ fn svg_node(
                 d.push_str(&path_d(c, true, ox, oy));
             }
             for (pi, p) in n.fills.iter().enumerate() {
-                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out, x, y, n.w, n.h);
                 out.push_str(&format!(
                     r#"<path d="{d}" fill-rule="evenodd" fill="{fill}" fill-opacity="{}"/>"#,
                     p.opacity

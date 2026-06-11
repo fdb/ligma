@@ -96,7 +96,7 @@ floating session chat relays through the same presence room.
 
 ## Roadmap (Figma 1.0 scope)
 
-- Radial gradients and gradient handles on the canvas (linear fills work)
+- Gradient handles on the canvas (linear and radial fills work)
 - Pathfinder on 3+ shapes and curve-exact clipping (pairwise
   union/subtract/intersect, flatten, and outline stroke already work)
 - Rich text: per-span font family/size/color (bold/italic spans work)

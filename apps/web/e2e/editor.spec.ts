@@ -1294,8 +1294,22 @@ test("linear gradient fills: toggle, render across the axis, persist", async ({ 
     .poll(async () => (await sceneOf(page)).nodes[0].fills[0].kind)
     .toBe("linear");
 
-  // Toggling back reverts to a solid fill.
-  await clickCanvas(page, 400, 300);
+  // The toggle cycles on: linear → radial (center red, edges white),
+  // then back to solid. The reload re-fit the camera, so compute screen
+  // points from the live scene.
+  const s2 = await sceneOf(page);
+  const rect = s2.nodes[0];
+  const sx = (wx: number) => wx * s2.zoom + s2.panX;
+  const sy = (wy: number) => wy * s2.zoom + s2.panY;
+  await clickCanvas(page, sx(rect.x + rect.w / 2), sy(rect.y + rect.h / 2));
+  await page.getByTestId("gradient-toggle-0").click();
+  expect((await sceneOf(page)).nodes[0].fills[0].kind).toBe("radial");
+  await expect
+    .poll(async () => (await pixelAt(sx(rect.x + rect.w / 2), sy(rect.y + rect.h / 2)))[1])
+    .toBeLessThan(80);
+  await expect
+    .poll(async () => (await pixelAt(sx(rect.x + 4), sy(rect.y + 4)))[1])
+    .toBeGreaterThan(180);
   await page.getByTestId("gradient-toggle-0").click();
   expect((await sceneOf(page)).nodes[0].fills[0].kind).toBe("solid");
 });
