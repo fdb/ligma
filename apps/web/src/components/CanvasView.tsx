@@ -159,6 +159,11 @@ export function CanvasView({
       } else if (e.key === "Backspace" || e.key === "Delete") {
         engine.delete_selection();
       } else if (e.key === "Escape") {
+        // First Escape leaves vector-edit mode, keeping the selection.
+        if (engine.path_edit_active()) {
+          engine.exit_path_edit();
+          return;
+        }
         onExitCommentMode();
         engine.clear_selection();
         // Leaving the pen tool commits the in-progress path (engine-side).
@@ -214,6 +219,12 @@ export function CanvasView({
     const live: Scene = JSON.parse(engine.scene());
     if (live.tool !== "select") return;
     const { x, y } = pos(e);
+    // Vector-edit mode: double-click toggles an anchor corner <-> smooth;
+    // off the anchors it leaves edit mode.
+    if (live.pathEdit != null) {
+      if (!engine.path_toggle_anchor(x, y)) engine.exit_path_edit();
+      return;
+    }
     const labelId = engine.frame_label_at(x, y);
     if (labelId !== undefined) {
       engine.set_editing_node(labelId);
@@ -226,6 +237,8 @@ export function CanvasView({
     if (hit?.kind === "text") {
       engine.set_editing_node(hit.id);
       setOverlay({ id: hit.id, kind: "text" });
+    } else if (hit?.kind === "path") {
+      engine.enter_path_edit(hit.id);
     }
   };
 

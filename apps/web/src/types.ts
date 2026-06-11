@@ -61,6 +61,8 @@ export interface Scene {
   zoom: number;
   panX: number;
   panY: number;
+  /** Id of the path in vector-edit mode, or null. */
+  pathEdit: number | null;
   generation: number;
   docGeneration: number;
 }

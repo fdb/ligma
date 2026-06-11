@@ -1032,3 +1032,48 @@ test("pen tool: open path, smooth anchor, closed triangle, persistence", async (
   expect(reloaded.closed).toBe(true);
   expect(reloaded.points.length).toBe(3);
 });
+
+test("path editing: double-click to edit, drag anchors, toggle smooth, escape", async ({
+  page,
+}) => {
+  await openNewDocument(page);
+
+  // Draw an L with the pen: three corner anchors.
+  await page.keyboard.press("p");
+  await clickCanvas(page, 200, 200);
+  await clickCanvas(page, 300, 200);
+  await clickCanvas(page, 300, 300);
+  await page.keyboard.press("Enter");
+  const pathId = (await sceneOf(page)).nodes[0].id;
+
+  // Double-click a segment to enter vector-edit mode.
+  const box = await canvasBox(page);
+  await page.mouse.dblclick(box.x + 250, box.y + 200);
+  await expect.poll(async () => (await sceneOf(page)).pathEdit).toBe(pathId);
+
+  // Drag the corner anchor at screen (300,200) up and to the right.
+  // World ≠ screen (the camera pans on load), so assert the delta.
+  const before = (await sceneOf(page)).nodes[0].points[1];
+  await drag(page, 300, 200, 340, 160);
+  let pts = (await sceneOf(page)).nodes[0].points;
+  expect(pts[1].x).toBeCloseTo(before.x + 40, 5);
+  expect(pts[1].y).toBeCloseTo(before.y - 40, 5);
+  // Bounds follow the anchors (the dragged one is now topmost).
+  expect((await sceneOf(page)).nodes[0].y).toBeCloseTo(pts[1].y, 5);
+
+  // Double-click the anchor: corner becomes smooth (handles appear).
+  await page.mouse.dblclick(box.x + 340, box.y + 160);
+  pts = (await sceneOf(page)).nodes[0].points;
+  expect(pts[1].hxOut).not.toBe(pts[1].x);
+  // Still in edit mode after a toggle.
+  expect((await sceneOf(page)).pathEdit).toBe(pathId);
+
+  // Escape leaves edit mode but keeps the path selected.
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await sceneOf(page)).pathEdit).toBe(null);
+  expect((await sceneOf(page)).selection).toEqual([pathId]);
+
+  // A second Escape clears the selection as usual.
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await sceneOf(page)).selection).toEqual([]);
+});

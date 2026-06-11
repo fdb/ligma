@@ -501,6 +501,38 @@ enum Drag {
     },
 }
 
+/// Vector edit mode: double-clicking a path exposes its anchors for
+/// direct manipulation. Anchor selection is by index into `points`.
+struct PathEdit {
+    id: u32,
+    selected: Vec<usize>,
+    drag: PathDrag,
+}
+
+enum PathDrag {
+    None,
+    /// Moving every selected anchor by the pointer delta.
+    Anchors { last_x: f64, last_y: f64, moved: bool },
+    /// Dragging one control handle; `broken` (alt) frees it from its
+    /// mirror, otherwise the opposite handle stays collinear.
+    Handle { idx: usize, out: bool, broken: bool, moved: bool },
+    /// Rubber-band selecting anchors.
+    Marquee { ox: f64, oy: f64, cx: f64, cy: f64 },
+}
+
+/// Screen-space grab radius for anchors and handle dots.
+const ANCHOR_GRAB: f64 = 8.0;
+
+fn nearest_anchor(points: &[Anchor], x: f64, y: f64, grab: f64) -> Option<usize> {
+    points
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (i, (a.x - x).hypot(a.y - y)))
+        .filter(|&(_, d)| d <= grab)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
 /// An in-progress pen path. Lives outside the document until committed,
 /// so undo treats the whole path as one step.
 struct PenState {
@@ -598,6 +630,8 @@ struct SceneInfo<'a> {
     zoom: f64,
     pan_x: f64,
     pan_y: f64,
+    /// Id of the path in vector-edit mode, if any.
+    path_edit: Option<u32>,
     generation: u32,
     doc_generation: u32,
 }
@@ -623,6 +657,7 @@ pub struct Engine {
     zoom: f64,
     drag: Drag,
     pen: Option<PenState>,
+    path_edit: Option<PathEdit>,
     guides: Vec<Guide>,
     editing: Option<u32>,
     pending_undo: Option<Vec<Node>>,
@@ -653,6 +688,7 @@ impl Engine {
             zoom: 1.0,
             drag: Drag::None,
             pen: None,
+            path_edit: None,
             guides: Vec::new(),
             editing: None,
             pending_undo: None,
@@ -684,6 +720,7 @@ impl Engine {
             zoom: self.zoom,
             pan_x: self.pan_x,
             pan_y: self.pan_y,
+            path_edit: self.path_edit.as_ref().map(|p| p.id),
             generation: self.generation,
             doc_generation: self.doc_generation,
         })
@@ -724,6 +761,7 @@ impl Engine {
         recompute_group_bounds(&mut self.nodes);
         self.selection.clear();
         self.hovered = None;
+        self.path_edit = None;
         self.undo.clear();
         self.redo.clear();
         self.touch();
@@ -737,6 +775,10 @@ impl Engine {
         // Leaving the pen tool commits whatever was drawn so far.
         if self.tool == Tool::Pen && next != Tool::Pen {
             self.finish_pen(false);
+        }
+        // Picking a drawing tool leaves vector-edit mode.
+        if next != Tool::Select {
+            self.path_edit = None;
         }
         self.tool = next;
         self.touch();
@@ -806,6 +848,249 @@ impl Engine {
         self.touch();
     }
 
+    // ----- path editing (double-click a path) -----
+
+    pub fn enter_path_edit(&mut self, id: u32) {
+        let is_path =
+            find_node(&self.nodes, id).map(|n| n.kind == NodeKind::Path).unwrap_or(false);
+        if is_path {
+            self.path_edit = Some(PathEdit { id, selected: Vec::new(), drag: PathDrag::None });
+            self.selection = vec![id];
+            self.hovered = None;
+            self.touch();
+        }
+    }
+
+    pub fn exit_path_edit(&mut self) {
+        if self.path_edit.take().is_some() {
+            self.touch();
+        }
+    }
+
+    pub fn path_edit_active(&self) -> bool {
+        self.path_edit.is_some()
+    }
+
+    /// Double-click on an anchor while editing toggles corner <-> smooth.
+    /// Returns false when no anchor sits under the (screen-space) point.
+    pub fn path_toggle_anchor(&mut self, sx: f64, sy: f64) -> bool {
+        let (x, y) = self.to_world(sx, sy);
+        let grab = ANCHOR_GRAB / self.zoom;
+        let Some(pe) = &self.path_edit else {
+            return false;
+        };
+        let id = pe.id;
+        let Some(n) = find_node(&self.nodes, id) else {
+            return false;
+        };
+        let Some(i) = nearest_anchor(&n.points, x, y, grab) else {
+            return false;
+        };
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let len = n.points.len();
+            let a = &n.points[i];
+            let smooth =
+                a.hx_in != a.x || a.hy_in != a.y || a.hx_out != a.x || a.hy_out != a.y;
+            if smooth {
+                let a = &mut n.points[i];
+                a.hx_in = a.x;
+                a.hy_in = a.y;
+                a.hx_out = a.x;
+                a.hy_out = a.y;
+            } else {
+                // Corner -> smooth: collinear handles along the direction
+                // between the neighbors, a third of each span long.
+                let prev = if i == 0 { if n.closed { len - 1 } else { i } } else { i - 1 };
+                let next = if i + 1 == len { if n.closed { 0 } else { i } } else { i + 1 };
+                let (px, py) = (n.points[prev].x, n.points[prev].y);
+                let (qx, qy) = (n.points[next].x, n.points[next].y);
+                let a = &mut n.points[i];
+                let (dx, dy) = (qx - px, qy - py);
+                let d = dx.hypot(dy);
+                if d > 0.0 {
+                    let (ux, uy) = (dx / d, dy / d);
+                    let dn = ((qx - a.x).hypot(qy - a.y) / 3.0).max(8.0);
+                    let dp = ((px - a.x).hypot(py - a.y) / 3.0).max(8.0);
+                    a.hx_out = a.x + ux * dn;
+                    a.hy_out = a.y + uy * dn;
+                    a.hx_in = a.x - ux * dp;
+                    a.hy_in = a.y - uy * dp;
+                }
+            }
+            sync_path_bounds(n);
+        }
+        recompute_group_bounds(&mut self.nodes);
+        self.touch();
+        true
+    }
+
+    fn path_edit_pointer_down(&mut self, x: f64, y: f64, shift: bool, alt: bool) {
+        let grab = ANCHOR_GRAB / self.zoom;
+        let Some(pe) = &self.path_edit else {
+            return;
+        };
+        let id = pe.id;
+        let selected = pe.selected.clone();
+        let Some(n) = find_node(&self.nodes, id) else {
+            self.path_edit = None;
+            return;
+        };
+
+        // Handle dots first — only selected anchors show them, and they
+        // can sit within an anchor's own grab radius.
+        for &i in &selected {
+            let Some(a) = n.points.get(i) else {
+                continue;
+            };
+            for (hx, hy, out) in [(a.hx_out, a.hy_out, true), (a.hx_in, a.hy_in, false)] {
+                if (hx != a.x || hy != a.y) && (hx - x).hypot(hy - y) <= grab {
+                    self.begin_mutation();
+                    let pe = self.path_edit.as_mut().unwrap();
+                    pe.drag = PathDrag::Handle { idx: i, out, broken: alt, moved: false };
+                    return;
+                }
+            }
+        }
+        if let Some(i) = nearest_anchor(&n.points, x, y, grab) {
+            let pe = self.path_edit.as_mut().unwrap();
+            if shift {
+                if let Some(p) = pe.selected.iter().position(|&s| s == i) {
+                    pe.selected.remove(p);
+                } else {
+                    pe.selected.push(i);
+                }
+            } else if !pe.selected.contains(&i) {
+                pe.selected = vec![i];
+            }
+            self.begin_mutation();
+            let pe = self.path_edit.as_mut().unwrap();
+            pe.drag = PathDrag::Anchors { last_x: x, last_y: y, moved: false };
+            return;
+        }
+        // Empty space: rubber-band anchors.
+        let pe = self.path_edit.as_mut().unwrap();
+        if !shift {
+            pe.selected.clear();
+        }
+        pe.drag = PathDrag::Marquee { ox: x, oy: y, cx: x, cy: y };
+    }
+
+    fn path_edit_pointer_move(&mut self, x: f64, y: f64) {
+        let Some(pe) = &mut self.path_edit else {
+            return;
+        };
+        let id = pe.id;
+        match &mut pe.drag {
+            PathDrag::None => {}
+            PathDrag::Anchors { last_x, last_y, moved } => {
+                let (dx, dy) = (x - *last_x, y - *last_y);
+                *last_x = x;
+                *last_y = y;
+                *moved = *moved || dx != 0.0 || dy != 0.0;
+                let sel = pe.selected.clone();
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                    for &i in &sel {
+                        if let Some(a) = n.points.get_mut(i) {
+                            a.x += dx;
+                            a.y += dy;
+                            a.hx_in += dx;
+                            a.hy_in += dy;
+                            a.hx_out += dx;
+                            a.hy_out += dy;
+                        }
+                    }
+                    sync_path_bounds(n);
+                }
+                recompute_group_bounds(&mut self.nodes);
+            }
+            PathDrag::Handle { idx, out, broken, moved } => {
+                let (idx, out, broken) = (*idx, *out, *broken);
+                *moved = true;
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                    if let Some(a) = n.points.get_mut(idx) {
+                        if out {
+                            a.hx_out = x;
+                            a.hy_out = y;
+                        } else {
+                            a.hx_in = x;
+                            a.hy_in = y;
+                        }
+                        if !broken {
+                            // Keep the opposite handle collinear without
+                            // changing its length.
+                            let (ox, oy) =
+                                if out { (a.hx_in, a.hy_in) } else { (a.hx_out, a.hy_out) };
+                            let olen = (ox - a.x).hypot(oy - a.y);
+                            let dlen = (x - a.x).hypot(y - a.y);
+                            if olen > 0.0 && dlen > 0.0 {
+                                let (ux, uy) = ((x - a.x) / dlen, (y - a.y) / dlen);
+                                if out {
+                                    a.hx_in = a.x - ux * olen;
+                                    a.hy_in = a.y - uy * olen;
+                                } else {
+                                    a.hx_out = a.x - ux * olen;
+                                    a.hy_out = a.y - uy * olen;
+                                }
+                            }
+                        }
+                    }
+                    sync_path_bounds(n);
+                }
+                recompute_group_bounds(&mut self.nodes);
+            }
+            PathDrag::Marquee { ox, oy, cx, cy } => {
+                *cx = x;
+                *cy = y;
+                let (mx, my) = (ox.min(*cx), oy.min(*cy));
+                let (mw, mh) = ((*cx - *ox).abs(), (*cy - *oy).abs());
+                if let Some(n) = find_node(&self.nodes, id) {
+                    pe.selected = n
+                        .points
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| {
+                            a.x >= mx && a.x <= mx + mw && a.y >= my && a.y <= my + mh
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+            }
+        }
+    }
+
+    fn path_edit_pointer_up(&mut self) {
+        let Some(pe) = &mut self.path_edit else {
+            return;
+        };
+        let commit = match std::mem::replace(&mut pe.drag, PathDrag::None) {
+            PathDrag::Anchors { moved, .. } => moved,
+            PathDrag::Handle { moved, .. } => moved,
+            _ => false,
+        };
+        if commit {
+            self.commit_mutation();
+        } else {
+            self.pending_undo = None;
+        }
+        self.touch();
+    }
+
+    /// Drops edit state whose node disappeared or shrank (undo, deletes).
+    fn validate_path_edit(&mut self) {
+        if let Some(pe) = &self.path_edit {
+            match find_node(&self.nodes, pe.id) {
+                Some(n) if n.kind == NodeKind::Path => {
+                    let len = n.points.len();
+                    if let Some(pe) = &mut self.path_edit {
+                        pe.selected.retain(|&i| i < len);
+                    }
+                }
+                _ => self.path_edit = None,
+            }
+        }
+    }
+
     // ----- pointer input (screen coordinates) -----
 
     pub fn pointer_down(&mut self, sx: f64, sy: f64, shift: bool, alt: bool) {
@@ -815,6 +1100,11 @@ impl Engine {
                 self.drag = Drag::Pan { last_x: sx, last_y: sy };
             }
             Tool::Select => {
+                if self.path_edit.is_some() {
+                    self.path_edit_pointer_down(x, y, shift, alt);
+                    self.touch();
+                    return;
+                }
                 // Resize handles take priority, then frame labels, then
                 // nodes, then marquee.
                 if let Some(handle) = self.handle_at(sx, sy) {
@@ -936,6 +1226,11 @@ impl Engine {
             }
             return;
         }
+        if self.path_edit.is_some() {
+            self.path_edit_pointer_move(x, y);
+            self.touch();
+            return;
+        }
         match &mut self.drag {
             Drag::None => {
                 let hit = if self.tool == Tool::Select { self.hit_test(x, y) } else { None };
@@ -1050,6 +1345,10 @@ impl Engine {
                     self.touch();
                 }
             }
+            return;
+        }
+        if self.path_edit.is_some() {
+            self.path_edit_pointer_up();
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
@@ -1606,6 +1905,44 @@ impl Engine {
     // ----- destructive ops -----
 
     pub fn delete_selection(&mut self) {
+        // In vector-edit mode, Delete removes the selected anchors; the
+        // node itself goes once fewer than two remain.
+        if let Some(pe) = &self.path_edit {
+            let id = pe.id;
+            let mut sel = pe.selected.clone();
+            if !sel.is_empty() {
+                self.snapshot_now();
+                sel.sort_unstable();
+                sel.dedup();
+                let mut remove_node = false;
+                if let Some(n) = find_node_mut(&mut self.nodes, id) {
+                    for &i in sel.iter().rev() {
+                        if i < n.points.len() {
+                            n.points.remove(i);
+                        }
+                    }
+                    if n.points.len() < 2 {
+                        remove_node = true;
+                    } else {
+                        sync_path_bounds(n);
+                    }
+                }
+                if remove_node {
+                    if let Some(path) = path_to(&self.nodes, id) {
+                        let index = *path.last().unwrap();
+                        list_at(&mut self.nodes, &path).remove(index);
+                    }
+                    self.path_edit = None;
+                    self.selection.clear();
+                } else if let Some(pe) = &mut self.path_edit {
+                    pe.selected.clear();
+                }
+                dissolve_empty_groups(&mut self.nodes);
+                recompute_group_bounds(&mut self.nodes);
+                self.touch();
+                return;
+            }
+        }
         if self.selection.is_empty() {
             return;
         }
@@ -1620,6 +1957,7 @@ impl Engine {
         recompute_group_bounds(&mut self.nodes);
         self.selection.clear();
         self.hovered = None;
+        self.validate_path_edit();
         self.touch();
     }
 
@@ -1856,6 +2194,7 @@ impl Engine {
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.nodes, prev));
             self.retain_valid_selection();
+            self.validate_path_edit();
             self.touch_doc();
             self.touch();
         }
@@ -1865,6 +2204,7 @@ impl Engine {
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.nodes, next));
             self.retain_valid_selection();
+            self.validate_path_edit();
             self.touch_doc();
             self.touch();
         }
@@ -1903,27 +2243,79 @@ impl Engine {
         }
 
         // Selection outlines, then resize handles on the joint bbox.
-        for &id in &self.selection {
-            if let Some(n) = find_node(&self.nodes, id) {
+        // Vector-edit mode replaces this chrome with anchors and handles.
+        if self.path_edit.is_none() {
+            for &id in &self.selection {
+                if let Some(n) = find_node(&self.nodes, id) {
+                    ctx.set_stroke_style_str("#0ea5e9");
+                    ctx.set_line_width(1.5 / self.zoom);
+                    ctx.stroke_rect(n.x, n.y, n.w, n.h);
+                }
+            }
+            if let Some((bx, by, bx2, by2)) = self.selection_bbox(&self.selection) {
                 ctx.set_stroke_style_str("#0ea5e9");
-                ctx.set_line_width(1.5 / self.zoom);
-                ctx.stroke_rect(n.x, n.y, n.w, n.h);
+                if self.selection.len() > 1 {
+                    ctx.set_line_width(1.0 / self.zoom);
+                    ctx.stroke_rect(bx, by, bx2 - bx, by2 - by);
+                }
+                let hs = 7.0 / self.zoom;
+                for (hx, hy) in HANDLES {
+                    let (px, py) =
+                        (bx + hx * (bx2 - bx) - hs / 2.0, by + hy * (by2 - by) - hs / 2.0);
+                    ctx.set_fill_style_str("#ffffff");
+                    ctx.fill_rect(px, py, hs, hs);
+                    ctx.set_line_width(1.0 / self.zoom);
+                    ctx.stroke_rect(px, py, hs, hs);
+                }
             }
         }
-        if let Some((bx, by, bx2, by2)) = self.selection_bbox(&self.selection) {
-            ctx.set_stroke_style_str("#0ea5e9");
-            if self.selection.len() > 1 {
+
+        // Vector-edit chrome: outline, anchors (filled when selected),
+        // handle spokes and dots for selected anchors, anchor marquee.
+        if let Some(pe) = &self.path_edit {
+            if let Some(n) = find_node(&self.nodes, pe.id) {
+                ctx.set_stroke_style_str("#0ea5e9");
                 ctx.set_line_width(1.0 / self.zoom);
-                ctx.stroke_rect(bx, by, bx2 - bx, by2 - by);
-            }
-            let hs = 7.0 / self.zoom;
-            for (hx, hy) in HANDLES {
-                let (px, py) =
-                    (bx + hx * (bx2 - bx) - hs / 2.0, by + hy * (by2 - by) - hs / 2.0);
-                ctx.set_fill_style_str("#ffffff");
-                ctx.fill_rect(px, py, hs, hs);
+                trace_path(ctx, &n.points, n.closed);
+                ctx.stroke();
+                for &i in &pe.selected {
+                    if let Some(a) = n.points.get(i) {
+                        for (hx, hy) in [(a.hx_in, a.hy_in), (a.hx_out, a.hy_out)] {
+                            if hx != a.x || hy != a.y {
+                                ctx.set_stroke_style_str("#a1a1aa");
+                                ctx.set_line_width(1.0 / self.zoom);
+                                ctx.begin_path();
+                                ctx.move_to(a.x, a.y);
+                                ctx.line_to(hx, hy);
+                                ctx.stroke();
+                                ctx.set_fill_style_str("#ffffff");
+                                ctx.set_stroke_style_str("#0ea5e9");
+                                ctx.begin_path();
+                                let _ = ctx.arc(hx, hy, 3.5 / self.zoom, 0.0, TAU);
+                                ctx.fill();
+                                ctx.stroke();
+                            }
+                        }
+                    }
+                }
+                let hs = 7.0 / self.zoom;
                 ctx.set_line_width(1.0 / self.zoom);
-                ctx.stroke_rect(px, py, hs, hs);
+                for (i, a) in n.points.iter().enumerate() {
+                    let sel = pe.selected.contains(&i);
+                    ctx.set_fill_style_str(if sel { "#0ea5e9" } else { "#ffffff" });
+                    ctx.set_stroke_style_str("#0ea5e9");
+                    ctx.fill_rect(a.x - hs / 2.0, a.y - hs / 2.0, hs, hs);
+                    ctx.stroke_rect(a.x - hs / 2.0, a.y - hs / 2.0, hs, hs);
+                }
+                if let PathDrag::Marquee { ox, oy, cx, cy } = pe.drag {
+                    ctx.set_fill_style_str("rgba(14, 165, 233, 0.08)");
+                    ctx.set_stroke_style_str("#0ea5e9");
+                    ctx.set_line_width(1.0 / self.zoom);
+                    let (mx, my) = (ox.min(cx), oy.min(cy));
+                    let (mw, mh) = ((cx - ox).abs(), (cy - oy).abs());
+                    ctx.fill_rect(mx, my, mw, mh);
+                    ctx.stroke_rect(mx, my, mw, mh);
+                }
             }
         }
 

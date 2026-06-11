@@ -69,6 +69,7 @@ cd apps/worker && npm run db:remote && npm run deploy
 | `V` `F` `R` `O` `P` `T` `H` | Move, Frame, Rectangle, Ellipse, Pen, Text, Hand |
 | Drag / click | Draw a shape (click places a default size) |
 | Pen clicks | Corner anchors · click-drag pulls out curve handles · click the first anchor to close · `Enter`/`Esc` ends an open path |
+| Double-click a path | Edit anchors: drag points/handles (`⌥` breaks a handle pair), double-click a point to toggle corner ↔ smooth, marquee-select, `⌫` deletes points |
 | `Space`-drag | Pan · scroll pans · `⌘`+scroll / pinch zooms |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 | `⌘G` / `⇧⌘G` | Group / ungroup |
@@ -96,8 +97,8 @@ floating session chat relays through the same presence room.
 
 - Frame clipping (children clip to their frame)
 - Gradients
-- Path node editing (move anchors/handles; pen drawing already works) and
-  boolean operations (flatten, union, subtract, …)
+- Boolean path operations (flatten, union, subtract, …; pen drawing and
+  node editing already work)
 - Rich text: styling spans inside a text node
 - Components and instances
 - Multiplayer co-editing (per-operation sync; presence/saves already live)

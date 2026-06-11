@@ -195,6 +195,9 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
   const [editing, setEditing] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [dropHint, setDropHint] = useState<{ id: number; zone: Zone } | null>(null);
+  // The latest hint, readable synchronously: a drop can arrive before
+  // React re-renders the state set by the preceding dragover.
+  const hintRef = useRef<{ id: number; zone: Zone } | null>(null);
   const dragId = useRef<number | null>(null);
 
   const toggleExpand = (id: number) =>
@@ -207,12 +210,13 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
 
   const clearDrag = () => {
     dragId.current = null;
+    hintRef.current = null;
     setDropHint(null);
   };
 
   const handleDrop = (targetId: number) => {
     const src = dragId.current;
-    const hint = dropHint;
+    const hint = hintRef.current;
     clearDrag();
     if (!src || !hint || hint.id !== targetId || src === targetId) return;
     if (hint.zone === "into") {
@@ -264,9 +268,10 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
             setEditing={setEditing}
             dropHint={dropHint}
             onDragStartRow={(id) => (dragId.current = id)}
-            onDragOverRow={(id, zone) =>
-              setDropHint((h) => (h?.id === id && h.zone === zone ? h : { id, zone }))
-            }
+            onDragOverRow={(id, zone) => {
+              hintRef.current = { id, zone };
+              setDropHint((h) => (h?.id === id && h.zone === zone ? h : { id, zone }));
+            }}
             onDropRow={handleDrop}
             onDragEndRow={clearDrag}
           />

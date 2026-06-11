@@ -564,6 +564,110 @@ assert(
   "switching tools commits the in-progress path",
 );
 
+// Path editing: enter/exit, anchor drag, handle drags, toggle, delete.
+const e20 = new Engine();
+e20.set_tool("pen");
+for (const [px, py] of [[100, 100], [200, 100], [200, 200]]) {
+  e20.pointer_down(px, py, false, false);
+  e20.pointer_up();
+}
+e20.pen_commit();
+const pid20 = JSON.parse(e20.scene()).nodes[0].id;
+e20.enter_path_edit(pid20);
+let s20 = JSON.parse(e20.scene());
+assert(s20.pathEdit === pid20, "enter_path_edit exposes the id in the scene");
+assert(e20.path_edit_active(), "path_edit_active reflects edit mode");
+
+// Drag the middle anchor: click it, move, release.
+e20.pointer_down(200, 100, false, false);
+e20.pointer_move(230, 80);
+e20.pointer_up();
+s20 = JSON.parse(e20.scene());
+let pts20 = s20.nodes[0].points;
+assert(pts20[1].x === 230 && pts20[1].y === 80, "anchor drag moves the anchor");
+assert(pts20[1].hxOut === 230, "anchor drag carries its handles");
+assert(s20.nodes[0].y === 80, "bounds resync after an anchor drag");
+e20.undo();
+pts20 = JSON.parse(e20.scene()).nodes[0].points;
+assert(pts20[1].x === 200, "anchor drag is one undo step");
+e20.redo();
+
+// Toggle the dragged (corner) anchor to smooth: handles appear collinear.
+assert(e20.path_toggle_anchor(230, 80), "toggle hits the anchor");
+pts20 = JSON.parse(e20.scene()).nodes[0].points;
+const t20 = pts20[1];
+assert(t20.hxOut !== t20.x || t20.hyOut !== t20.y, "toggled anchor grew handles");
+const crossT =
+  (t20.hxOut - t20.x) * (t20.y - t20.hyIn) - (t20.hyOut - t20.y) * (t20.x - t20.hxIn);
+assert(Math.abs(crossT) < 1e-6, "synthesized handles are collinear");
+assert(!e20.path_toggle_anchor(150, 150), "toggle misses empty space");
+
+// Smooth handle drag: moving the out handle rotates the in handle.
+e20.pointer_down(230, 80, false, false); // select the smooth anchor
+e20.pointer_up();
+const before20 = JSON.parse(e20.scene()).nodes[0].points[1];
+const inLen = Math.hypot(before20.hxIn - before20.x, before20.hyIn - before20.y);
+e20.pointer_down(before20.hxOut, before20.hyOut, false, false);
+e20.pointer_move(230, 20); // straight up from the anchor
+e20.pointer_up();
+let a20 = JSON.parse(e20.scene()).nodes[0].points[1];
+assert(a20.hxOut === 230 && a20.hyOut === 20, "handle drag moves the out handle");
+assert(
+  Math.abs(a20.hxIn - 230) < 1e-6 && Math.abs(a20.hyIn - (80 + inLen)) < 1e-6,
+  "smooth drag keeps the in handle mirrored at its own length",
+);
+
+// Broken (alt) handle drag: the in handle stays put.
+const heldIn = { x: a20.hxIn, y: a20.hyIn };
+e20.pointer_down(a20.hxOut, a20.hyOut, false, true); // alt
+e20.pointer_move(280, 60);
+e20.pointer_up();
+a20 = JSON.parse(e20.scene()).nodes[0].points[1];
+assert(a20.hxOut === 280 && a20.hyOut === 60, "alt drag moves the grabbed handle");
+assert(a20.hxIn === heldIn.x && a20.hyIn === heldIn.y, "alt drag leaves the mirror alone");
+
+// Marquee around two anchors, drag them together.
+e20.pointer_down(60, 60, false, false); // empty spot: starts anchor marquee
+e20.pointer_move(150, 250); // covers anchors at (100,100) and... only first
+e20.pointer_up();
+e20.pointer_down(100, 100, false, false); // drag from the selected anchor
+e20.pointer_move(110, 120);
+e20.pointer_up();
+pts20 = JSON.parse(e20.scene()).nodes[0].points;
+assert(pts20[0].x === 110 && pts20[0].y === 120, "marquee-selected anchor drags");
+
+// Delete an anchor; deleting down to one removes the node.
+e20.pointer_down(110, 120, false, false);
+e20.pointer_up();
+e20.delete_selection();
+pts20 = JSON.parse(e20.scene()).nodes[0].points;
+assert(pts20.length === 2, "delete removes the selected anchor");
+e20.pointer_down(pts20[0].x, pts20[0].y, false, false);
+e20.pointer_up();
+e20.delete_selection();
+s20 = JSON.parse(e20.scene());
+assert(s20.nodes.length === 0, "a path below two anchors is deleted");
+assert(s20.pathEdit === null, "edit mode exits with its node");
+
+// Exit by hand and by tool switch.
+const e21 = new Engine();
+e21.set_tool("pen");
+for (const [px, py] of [[0, 0], [100, 0]]) {
+  e21.pointer_down(px, py, false, false);
+  e21.pointer_up();
+}
+e21.pen_commit();
+const pid21 = JSON.parse(e21.scene()).nodes[0].id;
+e21.enter_path_edit(pid21);
+e21.exit_path_edit();
+assert(!e21.path_edit_active(), "exit_path_edit leaves edit mode");
+e21.enter_path_edit(pid21);
+e21.set_tool("rect");
+assert(!e21.path_edit_active(), "switching to a drawing tool leaves edit mode");
+e21.set_tool("select");
+e21.enter_path_edit(99999);
+assert(!e21.path_edit_active(), "enter_path_edit ignores unknown ids");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");
