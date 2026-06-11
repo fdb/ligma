@@ -4,6 +4,8 @@ import { hexToRgb, hsvToRgb, rgbToHex, rgbToHsv } from "../lib/color";
 interface Props {
   color: string; // #rrggbb
   opacity: number; // 0..1
+  /** Colors already used in the document, most frequent first. */
+  documentColors?: string[];
   anchor: DOMRect; // swatch rect; the popover opens to its left
   onGestureStart: () => void; // begin_edit (coalesce the drag into one undo)
   onLive: (color: string, opacity: number) => void;
@@ -20,6 +22,7 @@ const CHECKER =
 export function ColorPicker({
   color,
   opacity,
+  documentColors,
   anchor,
   onGestureStart,
   onLive,
@@ -272,6 +275,29 @@ export function ColorPicker({
           <span className="text-[11px] text-zinc-400">%</span>
         </div>
       </div>
+
+      {documentColors && documentColors.length > 0 && (
+        <div className="mt-3 border-t border-zinc-100 pt-2.5">
+          <div className="mb-1.5 text-[10px] font-semibold tracking-wide text-zinc-400 uppercase">
+            Document colors
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {documentColors.map((c) => (
+              <button
+                key={c}
+                data-testid={`doc-color-${c.replace("#", "")}`}
+                title={c.toUpperCase()}
+                onClick={() => {
+                  setHsv(rgbToHsv(...hexToRgb(c)));
+                  onSet(c, alpha);
+                }}
+                className="size-5 rounded-md border border-zinc-200 transition-transform hover:scale-110"
+                style={{ background: c }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {picking && probe && (
         <div

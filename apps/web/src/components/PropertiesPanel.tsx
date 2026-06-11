@@ -91,6 +91,7 @@ function PaintRow({
         <ColorPicker
           color={paint.color}
           opacity={paint.opacity}
+          documentColors={JSON.parse(engine.document_colors())}
           anchor={swatchRef.current!.getBoundingClientRect()}
           onGestureStart={() => engine.begin_edit()}
           onLive={(c, o) => engine.update_paint_live(nodeId, kind, index, c, o)}

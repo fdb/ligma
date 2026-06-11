@@ -1250,6 +1250,68 @@ edp.pointer_up();
   );
 }
 
+// Frame-interior drags marquee children; clicks still select the frame.
+const ef9 = new Engine();
+ef9.set_tool("frame");
+ef9.pointer_down(100, 100, false, false);
+ef9.pointer_move(300, 300, false);
+ef9.pointer_up();
+ef9.set_tool("rect");
+ef9.pointer_down(150, 150, false, false);
+ef9.pointer_move(200, 200, false);
+ef9.pointer_up();
+ef9.set_tool("rect");
+ef9.pointer_down(220, 150, false, false);
+ef9.pointer_move(270, 200, false);
+ef9.pointer_up();
+ef9.set_tool("select");
+ef9.pointer_down(600, 600, false, false); // deselect
+ef9.pointer_up();
+const ef9x = JSON.parse(ef9.scene()).nodes[0].x;
+ef9.pointer_down(140, 140, false, false);
+ef9.pointer_move(280, 210, false);
+ef9.pointer_up();
+{
+  const s9 = JSON.parse(ef9.scene());
+  assert(
+    s9.nodes[0].x === ef9x && s9.selection.length === 2,
+    "dragging a non-empty frame's interior marquees its children",
+  );
+}
+ef9.pointer_down(600, 600, false, false);
+ef9.pointer_up();
+ef9.pointer_down(120, 280, false, false); // frame body, off the children
+ef9.pointer_up();
+assert(
+  JSON.parse(ef9.scene()).selection[0] === JSON.parse(ef9.scene()).nodes[0].id,
+  "a plain click on the frame body still selects the frame",
+);
+ef9.pointer_down(120, 280, false, false); // now selected: drag moves it
+ef9.pointer_move(130, 290, false);
+ef9.pointer_up();
+assert(
+  JSON.parse(ef9.scene()).nodes[0].x === ef9x + 10,
+  "a selected frame still drags by its body",
+);
+
+// Document colors: most frequent first, includes gradient stops/spans.
+const ec9 = new Engine();
+ec9.set_tool("rect");
+ec9.pointer_down(0, 0, false, false);
+ec9.pointer_move(50, 50, false);
+ec9.pointer_up();
+ec9.set_tool("rect");
+ec9.pointer_down(60, 0, false, false);
+ec9.pointer_move(110, 50, false);
+ec9.pointer_up();
+{
+  const ids9 = JSON.parse(ec9.scene()).nodes.map((n) => n.id);
+  ec9.update_paint(ids9[0], "fills", 0, "#ff0000", 1);
+  ec9.update_paint(ids9[1], "fills", 0, "#ff0000", 1);
+  const colors = JSON.parse(ec9.document_colors());
+  assert(colors[0] === "#ff0000", "document_colors sorts by frequency");
+}
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

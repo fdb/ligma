@@ -670,6 +670,9 @@ enum Drag {
         oy: f64,
         cx: f64,
         cy: f64,
+        /// 0 selects among root nodes; a frame id restricts the rubber
+        /// band to that frame's children (drag started on its body).
+        scope: u32,
     },
 }
 
@@ -1763,6 +1766,23 @@ impl Engine {
                                     .map_or(false, |n| self.node_hit(n, x, y))
                         })
                         .unwrap_or(id);
+                    // Dragging the interior of an unselected, non-empty
+                    // frame draws a marquee over its children instead of
+                    // moving the frame — a plain click still selects it,
+                    // and the label stays a drag handle.
+                    if !shift && !alt && !self.selection.contains(&id) {
+                        let frame_body = find_node(&self.nodes, id).is_some_and(|f| {
+                            matches!(f.kind, NodeKind::Frame | NodeKind::Component)
+                                && !f.children.is_empty()
+                        }) && self.hit_test(x, y) == Some(id);
+                        if frame_body {
+                            self.selection.clear();
+                            self.drag =
+                                Drag::Marquee { ox: x, oy: y, cx: x, cy: y, scope: id };
+                            self.touch();
+                            return;
+                        }
+                    }
                     if shift {
                         if let Some(i) = self.selection.iter().position(|&s| s == id) {
                             self.selection.remove(i);
@@ -1799,7 +1819,7 @@ impl Engine {
                     if !shift {
                         self.selection.clear();
                     }
-                    self.drag = Drag::Marquee { ox: x, oy: y, cx: x, cy: y };
+                    self.drag = Drag::Marquee { ox: x, oy: y, cx: x, cy: y, scope: 0 };
                 }
                 self.touch();
             }
@@ -2019,13 +2039,17 @@ impl Engine {
                 }
                 recompute_group_bounds(&mut self.nodes);
             }
-            Drag::Marquee { ox, oy, cx, cy } => {
+            Drag::Marquee { ox, oy, cx, cy, scope } => {
                 *cx = x;
                 *cy = y;
                 let (mx, my) = (ox.min(*cx), oy.min(*cy));
                 let (mw, mh) = ((*cx - *ox).abs(), (*cy - *oy).abs());
-                self.selection = self
-                    .nodes
+                let list: &[Node] = if *scope == 0 {
+                    &self.nodes
+                } else {
+                    find_node(&self.nodes, *scope).map_or(&[][..], |n| &n.children)
+                };
+                self.selection = list
                     .iter()
                     .filter(|n| n.visible && !n.locked && n.intersects(mx, my, mw, mh))
                     .map(|n| n.id)
@@ -2131,6 +2155,15 @@ impl Engine {
                 }
                 recompute_group_bounds(&mut self.nodes);
                 self.commit_mutation();
+            }
+            Drag::Marquee { ox, oy, cx, cy, scope } => {
+                self.pending_undo = None;
+                // A click (no real drag) on a non-empty frame's body
+                // selects the frame itself.
+                let tol = 3.0 / self.zoom;
+                if scope != 0 && (cx - ox).abs() < tol && (cy - oy).abs() < tol {
+                    self.selection = vec![scope];
+                }
             }
             _ => {
                 self.pending_undo = None;
@@ -3109,6 +3142,41 @@ impl Engine {
 
     // ----- canvas text editing & frame labels -----
 
+    /// Solid colors used anywhere in the document (fills, strokes,
+    /// gradient stops, text span colors), most frequent first, as a JSON
+    /// array of hex strings. Feeds the picker's "document colors" row.
+    pub fn document_colors(&self) -> String {
+        fn add(counts: &mut Vec<(String, u32)>, c: &str) {
+            if c.is_empty() {
+                return;
+            }
+            match counts.iter_mut().find(|(k, _)| k == c) {
+                Some(e) => e.1 += 1,
+                None => counts.push((c.to_string(), 1)),
+            }
+        }
+        fn walk(counts: &mut Vec<(String, u32)>, nodes: &[Node]) {
+            for n in nodes {
+                for p in n.fills.iter().chain(&n.strokes) {
+                    add(counts, &p.color);
+                    for s in &p.stops {
+                        add(counts, &s.color);
+                    }
+                }
+                for s in &n.spans {
+                    add(counts, &s.color);
+                }
+                walk(counts, &n.children);
+            }
+        }
+        let mut counts = Vec::new();
+        walk(&mut counts, &self.nodes);
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        counts.truncate(12);
+        let colors: Vec<String> = counts.into_iter().map(|(c, _)| c).collect();
+        serde_json::to_string(&colors).unwrap_or_else(|_| "[]".into())
+    }
+
     /// Marks a node as being edited in an overlay; rendering skips it.
     /// Pass 0 to clear.
     pub fn set_editing_node(&mut self, id: u32) {
@@ -3574,7 +3642,7 @@ impl Engine {
         }
 
         // Marquee.
-        if let Drag::Marquee { ox, oy, cx, cy } = self.drag {
+        if let Drag::Marquee { ox, oy, cx, cy, .. } = self.drag {
             ctx.set_fill_style_str("rgba(14, 165, 233, 0.08)");
             ctx.set_stroke_style_str("#0ea5e9");
             ctx.set_line_width(1.0 / self.zoom);

@@ -1629,3 +1629,57 @@ test("double-click deep-selects into groups; next one edits text", async ({ page
   await expect(page.getByTestId("text-editor")).toBeVisible();
   await page.keyboard.press("Escape");
 });
+
+test("frame-interior drag marquees children; document colors fill the picker", async ({
+  page,
+}) => {
+  await openNewDocument(page);
+
+  // A frame with two child rects.
+  await page.keyboard.press("f");
+  await drag(page, 150, 150, 500, 450);
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 250, 250);
+  await page.keyboard.press("r");
+  await drag(page, 280, 200, 330, 250);
+  await page.keyboard.press("Escape"); // deselect
+
+  // Dragging across the frame's interior rubber-bands its children
+  // instead of moving the frame.
+  const before = (await sceneOf(page)).nodes[0].x;
+  await drag(page, 190, 190, 340, 260);
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return [s.nodes[0].x === before, s.selection.length];
+    })
+    .toEqual([true, 2]);
+
+  // A plain click on the body still selects the frame.
+  await clickCanvas(page, 170, 400);
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return findKind(s.nodes, s.selection[0]);
+    })
+    .toBe("frame");
+
+  // Color one child red, then apply it to the other through the
+  // picker's document-colors row.
+  await clickCanvas(page, 225, 225);
+  await page.getByTestId("swatch-fills-0").click();
+  const hexField = page.getByTestId("picker-hex");
+  await hexField.fill("FF0000");
+  await hexField.press("Enter");
+  await page.keyboard.press("Escape");
+
+  await clickCanvas(page, 305, 225);
+  await page.getByTestId("swatch-fills-0").click();
+  await page.getByTestId("doc-color-ff0000").click();
+  await expect
+    .poll(async () => {
+      const f = (await sceneOf(page)).nodes[0];
+      return f.children.map((c: any) => c.fills[0].color);
+    })
+    .toEqual(["#ff0000", "#ff0000"]);
+});
