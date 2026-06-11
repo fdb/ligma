@@ -1,12 +1,19 @@
 # TODO / FEATURE WISHLIST
 
+- Code architecture: all code is now in one lib.rs. Can we start thinking about splitting this up into multiple files? 
 - Text spans: per-span font family, size and color (bold/italic spans shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
+- pathfinder operations stay non-destructive: they appear as a group, with the source shapes inside, until flattened
 - Double clicking an item in a group should select that item, allowing operations on that (e.g. resizing, editing text, and so on)
 - Hold shift while dragging to constrain proportions, e.g. while creating a new shape
+- Custom color picker should also have "document colors" - colors that appear on this document, sorted by most frequently used
+- If a frame is empty dragging inside of a frame drags the frame. if it has one item, dragging inside of it will create a drag selection rectangle to select items of the frame
+- You can also drag the sides of an item to change the width/height, not just the corner points
 
 # DONE (things are moved here once they are done)
+
+- Linear gradient fills: toggle any fill between solid and a linear gradient (stop hex inputs + angle in the panel, gradient preview in the swatch); rendered across the node's bounding box on canvas and as an SVG paint server, persisted with the document; picking a flat color reverts to solid
 
 - Frame clipping: children render clipped to their frame's (rounded) bounds, on canvas and in SVG export; clipped-away overhang was already unreachable by clicks
 

@@ -283,7 +283,9 @@ test("v1 documents migrate to the paint model on load", async ({ page }) => {
   const fills = await page.evaluate(
     () => JSON.parse((window as any).__engine.scene()).nodes[0].fills,
   );
-  expect(fills).toEqual([{ color: "#ff0000", opacity: 1 }]);
+  expect(fills).toEqual([
+    { color: "#ff0000", opacity: 1, kind: "solid", stops: [], angle: 0 },
+  ]);
 });
 
 test("option-drag copies a shape; one undo removes the copy", async ({ page }) => {
@@ -1254,4 +1256,46 @@ test("frames clip their children's rendering", async ({ page }) => {
   // to the canvas background.
   await expect.poll(() => pixelAt(390, 290)).toEqual([212, 212, 216]);
   await expect.poll(() => pixelAt(450, 290)).toEqual([233, 233, 236]);
+});
+
+test("linear gradient fills: toggle, render across the axis, persist", async ({ page }) => {
+  const id = await openNewDocument(page);
+  await page.keyboard.press("r");
+  await drag(page, 300, 200, 500, 400);
+
+  // Make it red, then toggle the fill to a linear gradient (red → white,
+  // 90° = top-to-bottom).
+  await page.evaluate(() => {
+    const e = (window as any).__engine;
+    const s = JSON.parse(e.scene());
+    e.update_paint(s.nodes[0].id, "fills", 0, "#ff0000", 1);
+  });
+  await page.getByTestId("gradient-toggle-0").click();
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // Near the top: red dominates; near the bottom: almost white.
+  await expect.poll(async () => (await pixelAt(400, 210))[1]).toBeLessThan(80);
+  await expect.poll(async () => (await pixelAt(400, 390))[1]).toBeGreaterThan(200);
+
+  // The gradient survives save + reload.
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
+  await page.goto(`/d/${id}`);
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+  await expect
+    .poll(async () => (await sceneOf(page)).nodes[0].fills[0].kind)
+    .toBe("linear");
+
+  // Toggling back reverts to a solid fill.
+  await clickCanvas(page, 400, 300);
+  await page.getByTestId("gradient-toggle-0").click();
+  expect((await sceneOf(page)).nodes[0].fills[0].kind).toBe("solid");
 });

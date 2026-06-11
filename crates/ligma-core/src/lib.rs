@@ -58,12 +58,45 @@ pub struct Span {
     pub italic: bool,
 }
 
-/// A single fill or stroke: a color with its own opacity.
+/// A gradient color stop at a 0..1 position along the gradient axis.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStop {
+    pub position: f64,
+    pub color: String,
+}
+
+fn default_paint_kind() -> String {
+    "solid".to_string()
+}
+
+impl Paint {
+    fn solid(color: &str, opacity: f64) -> Paint {
+        Paint {
+            color: color.to_string(),
+            opacity,
+            kind: default_paint_kind(),
+            stops: Vec::new(),
+            angle: 0.0,
+        }
+    }
+}
+
+/// A single fill or stroke: a solid color, or a linear gradient across
+/// the node's bounding box. `color` doubles as the solid value and the
+/// swatch fallback.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Paint {
     pub color: String,
     pub opacity: f64,
+    #[serde(default = "default_paint_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub stops: Vec<GradientStop>,
+    /// Gradient direction in degrees; 0 points right, 90 points down.
+    #[serde(default)]
+    pub angle: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1043,7 +1076,7 @@ fn migrate_v1(doc: v1::Document) -> Document {
             h: n.h,
             visible: true,
             locked: false,
-            fills: vec![Paint { color: n.fill, opacity: 1.0 }],
+            fills: vec![Paint::solid(&n.fill, 1.0)],
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: n.opacity,
@@ -1262,7 +1295,7 @@ impl Engine {
             if !closed {
                 n.fills.clear();
             }
-            n.strokes = vec![Paint { color: "#18181b".to_string(), opacity: 1.0 }];
+            n.strokes = vec![Paint::solid("#18181b", 1.0)];
         }
         // Same frame parenting rule as drawn shapes: center inside a frame
         // nests the path under it.
@@ -2129,9 +2162,9 @@ impl Engine {
     pub fn add_paint(&mut self, id: u32, kind: &str) {
         self.snapshot_now();
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
-            let paint = Paint { color: "#d4d4d8".to_string(), opacity: 1.0 };
+            let paint = Paint::solid("#d4d4d8", 1.0);
             if kind == "strokes" {
-                n.strokes.push(Paint { color: "#18181b".to_string(), ..paint });
+                n.strokes.push(Paint::solid("#18181b", 1.0));
             } else {
                 n.fills.push(paint);
             }
@@ -2171,6 +2204,29 @@ impl Engine {
             if let Some(p) = list.get_mut(index) {
                 p.color = color.to_string();
                 p.opacity = opacity.clamp(0.0, 1.0);
+                p.kind = default_paint_kind();
+                p.stops.clear();
+            }
+        }
+        self.touch();
+    }
+
+    /// Turns fills[index] into a linear gradient. `stops_json` is a JSON
+    /// array of { position, color }; fewer than two stops are rejected.
+    pub fn set_paint_gradient(&mut self, id: u32, index: usize, angle: f64, stops_json: &str) {
+        let Ok(stops) = serde_json::from_str::<Vec<GradientStop>>(stops_json) else {
+            return;
+        };
+        if stops.len() < 2 {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            if let Some(p) = n.fills.get_mut(index) {
+                p.kind = "linear".to_string();
+                p.angle = angle;
+                p.color = stops[0].color.clone();
+                p.stops = stops;
             }
         }
         self.touch();
@@ -2444,7 +2500,7 @@ impl Engine {
             visible: true,
             locked: false,
             fills: if style.fills.is_empty() && style.kind != NodeKind::Path {
-                vec![Paint { color: "#d4d4d8".to_string(), opacity: 1.0 }]
+                vec![Paint::solid("#d4d4d8", 1.0)]
             } else {
                 style.fills.clone()
             },
@@ -2542,7 +2598,7 @@ impl Engine {
             visible: true,
             locked: false,
             fills: if style.fills.is_empty() {
-                vec![Paint { color: "#d4d4d8".to_string(), opacity: 1.0 }]
+                vec![Paint::solid("#d4d4d8", 1.0)]
             } else {
                 style.fills.clone()
             },
@@ -2720,7 +2776,7 @@ impl Engine {
             h: by2 - by,
             visible: true,
             locked: false,
-            fills: vec![Paint { color: "#ffffff".to_string(), opacity: 1.0 }],
+            fills: vec![Paint::solid("#ffffff", 1.0)],
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: 1.0,
@@ -3511,7 +3567,7 @@ impl Engine {
             h,
             visible: true,
             locked: false,
-            fills: vec![Paint { color: fill.to_string(), opacity: 1.0 }],
+            fills: vec![Paint::solid(fill, 1.0)],
             strokes: Vec::new(),
             stroke_weight: 1.0,
             opacity: 1.0,
@@ -3598,7 +3654,7 @@ fn draw_node(
             ctx.set_shadow_offset_y(1.0);
             for p in &n.fills {
                 ctx.set_global_alpha(alpha * p.opacity);
-                ctx.set_fill_style_str(&p.color);
+                apply_fill(ctx, p, n.x, n.y, n.w, n.h);
                 fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
                 ctx.set_shadow_color("transparent");
             }
@@ -3620,7 +3676,7 @@ fn draw_node(
         NodeKind::Rect => {
             for p in &n.fills {
                 ctx.set_global_alpha(alpha * p.opacity);
-                ctx.set_fill_style_str(&p.color);
+                apply_fill(ctx, p, n.x, n.y, n.w, n.h);
                 fill_rounded(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
             }
             stroke_paints(ctx, n, alpha, |ctx| {
@@ -3630,7 +3686,7 @@ fn draw_node(
         NodeKind::Ellipse => {
             for p in &n.fills {
                 ctx.set_global_alpha(alpha * p.opacity);
-                ctx.set_fill_style_str(&p.color);
+                apply_fill(ctx, p, n.x, n.y, n.w, n.h);
                 ellipse_path(ctx, n);
                 ctx.fill();
             }
@@ -3692,7 +3748,7 @@ fn draw_node(
             if n.points.len() >= 2 {
                 for p in &n.fills {
                     ctx.set_global_alpha(alpha * p.opacity);
-                    ctx.set_fill_style_str(&p.color);
+                    apply_fill(ctx, p, n.x, n.y, n.w, n.h);
                     trace_path_all(ctx, n);
                     ctx.fill_with_canvas_winding_rule(web_sys::CanvasWindingRule::Evenodd);
                 }
@@ -3755,6 +3811,24 @@ fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_w: f64) -> Vec<Stri
         lines.push(line);
     }
     lines
+}
+
+/// Sets the context fill style for a paint: solid color, or a linear
+/// gradient spanning the node's bounding box at the paint's angle.
+fn apply_fill(ctx: &CanvasRenderingContext2d, p: &Paint, x: f64, y: f64, w: f64, h: f64) {
+    if p.kind == "linear" && p.stops.len() >= 2 {
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let rad = p.angle.to_radians();
+        let (dx, dy) = (rad.cos(), rad.sin());
+        let hl = (w / 2.0 * dx).abs() + (h / 2.0 * dy).abs();
+        let g = ctx.create_linear_gradient(cx - dx * hl, cy - dy * hl, cx + dx * hl, cy + dy * hl);
+        for s in &p.stops {
+            let _ = g.add_color_stop(s.position.clamp(0.0, 1.0) as f32, &s.color);
+        }
+        ctx.set_fill_style_canvas_gradient(&g);
+    } else {
+        ctx.set_fill_style_str(&p.color);
+    }
 }
 
 fn stroke_paints(
@@ -3834,6 +3908,32 @@ fn fill_rounded(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, 
 
 // ----- SVG serialization -----
 
+/// Emits a paint server for gradient paints (returns the fill value).
+/// Solid paints just return their escaped color.
+fn svg_fill(p: &Paint, uid: &str, out: &mut String) -> String {
+    if p.kind != "linear" || p.stops.len() < 2 {
+        return xml_escape(&p.color);
+    }
+    let rad = p.angle.to_radians();
+    let (dx, dy) = (rad.cos() / 2.0, rad.sin() / 2.0);
+    out.push_str(&format!(
+        r#"<linearGradient id="{uid}" x1="{}" y1="{}" x2="{}" y2="{}">"#,
+        0.5 - dx,
+        0.5 - dy,
+        0.5 + dx,
+        0.5 + dy
+    ));
+    for s in &p.stops {
+        out.push_str(&format!(
+            r#"<stop offset="{}" stop-color="{}"/>"#,
+            s.position.clamp(0.0, 1.0),
+            xml_escape(&s.color)
+        ));
+    }
+    out.push_str("</linearGradient>");
+    format!("url(#{uid})")
+}
+
 fn path_d(points: &[Anchor], closed: bool, ox: f64, oy: f64) -> String {
     if points.is_empty() {
         return String::new();
@@ -3886,10 +3986,11 @@ fn svg_node(
         NodeKind::Frame | NodeKind::Rect => {
             let rx = n.corner_radius.min(n.w / 2.0).min(n.h / 2.0);
             let rx_attr = if rx > 0.0 { format!(r#" rx="{rx}""#) } else { String::new() };
-            for p in &n.fills {
+            for (pi, p) in n.fills.iter().enumerate() {
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
                 out.push_str(&format!(
-                    r#"<rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr} fill="{}" fill-opacity="{}"/>"#,
-                    n.w, n.h, xml_escape(&p.color), p.opacity
+                    r#"<rect x="{x}" y="{y}" width="{}" height="{}"{rx_attr} fill="{fill}" fill-opacity="{}"/>"#,
+                    n.w, n.h, p.opacity
                 ));
             }
             for p in &n.strokes {
@@ -3915,10 +4016,11 @@ fn svg_node(
         }
         NodeKind::Ellipse => {
             let (cx, cy, rx, ry) = (x + n.w / 2.0, y + n.h / 2.0, n.w / 2.0, n.h / 2.0);
-            for p in &n.fills {
+            for (pi, p) in n.fills.iter().enumerate() {
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
                 out.push_str(&format!(
-                    r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{}" fill-opacity="{}"/>"#,
-                    xml_escape(&p.color), p.opacity
+                    r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}" fill-opacity="{}"/>"#,
+                    p.opacity
                 ));
             }
             for p in &n.strokes {
@@ -3978,10 +4080,10 @@ fn svg_node(
                 d.push(' ');
                 d.push_str(&path_d(c, true, ox, oy));
             }
-            for p in &n.fills {
+            for (pi, p) in n.fills.iter().enumerate() {
+                let fill = svg_fill(p, &format!("g{}f{}", n.id, pi), out);
                 out.push_str(&format!(
-                    r#"<path d="{d}" fill-rule="evenodd" fill="{}" fill-opacity="{}"/>"#,
-                    xml_escape(&p.color),
+                    r#"<path d="{d}" fill-rule="evenodd" fill="{fill}" fill-opacity="{}"/>"#,
                     p.opacity
                 ));
             }

@@ -54,8 +54,12 @@ function PaintRow({
     engine.update_paint(nodeId, kind, index, color, opacity);
   const [pickerOpen, setPickerOpen] = useState(false);
   const swatchRef = useRef<HTMLButtonElement>(null);
+  const isLinear = paint.kind === "linear" && paint.stops.length >= 2;
+  const setGradient = (angle: number, stops: { position: number; color: string }[]) =>
+    engine.set_paint_gradient(nodeId, index, angle, JSON.stringify(stops));
 
   return (
+    <>
     <div className="mb-1.5 flex items-center gap-1.5 last:mb-0">
       <button
         ref={swatchRef}
@@ -64,7 +68,16 @@ function PaintRow({
         onClick={() => setPickerOpen((o) => !o)}
         className="size-7 shrink-0 cursor-pointer rounded-md border border-zinc-200 bg-white p-0.5"
       >
-        <span className="block size-full rounded-[4px]" style={{ background: paint.color }} />
+        <span
+          className="block size-full rounded-[4px]"
+          style={{
+            background: isLinear
+              ? `linear-gradient(${paint.angle + 90}deg, ${paint.stops
+                  .map((s) => `${s.color} ${s.position * 100}%`)
+                  .join(", ")})`
+              : paint.color,
+          }}
+        />
       </button>
       {pickerOpen && (
         <ColorPicker
@@ -111,6 +124,25 @@ function PaintRow({
         />
         <span className="text-[11px] text-zinc-400">%</span>
       </div>
+      {kind === "fills" && (
+        <button
+          title={isLinear ? "Switch to solid" : "Switch to linear gradient"}
+          data-testid={`gradient-toggle-${index}`}
+          onClick={() =>
+            isLinear
+              ? update(paint.stops[0].color, paint.opacity)
+              : setGradient(90, [
+                  { position: 0, color: paint.color },
+                  { position: 1, color: "#ffffff" },
+                ])
+          }
+          className={`flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${
+            isLinear ? "bg-sky-50 text-sky-600" : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          }`}
+        >
+          ◧
+        </button>
+      )}
       <button
         title="Remove"
         onClick={() => engine.remove_paint(nodeId, kind, index)}
@@ -119,6 +151,55 @@ function PaintRow({
         <Icon name="minus" size={12} />
       </button>
     </div>
+    {isLinear && (
+      <div className="mb-1.5 flex items-center gap-1.5 pl-8">
+        {paint.stops.slice(0, 2).map((s, si) => (
+          <div
+            key={si}
+            className="flex h-7 min-w-0 flex-1 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400"
+          >
+            <input
+              key={s.color}
+              data-testid={`gradient-stop-${si}`}
+              defaultValue={s.color.replace("#", "").toUpperCase()}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={(e) => {
+                const hex = e.currentTarget.value.replace("#", "");
+                if (!/^[0-9a-fA-F]{6}$/.test(hex)) return;
+                const stops = paint.stops.map((p, i) =>
+                  i === si ? { ...p, color: `#${hex.toLowerCase()}` } : p,
+                );
+                setGradient(paint.angle, stops);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                e.stopPropagation();
+              }}
+              className="w-full bg-transparent font-mono text-[11.5px] text-zinc-800 outline-none"
+            />
+          </div>
+        ))}
+        <div className="flex h-7 w-14 shrink-0 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
+          <input
+            key={paint.angle}
+            data-testid="gradient-angle"
+            defaultValue={Math.round(paint.angle)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={(e) => {
+              const v = parseFloat(e.currentTarget.value);
+              if (!Number.isNaN(v)) setGradient(v, paint.stops);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              e.stopPropagation();
+            }}
+            className="w-full bg-transparent font-mono text-[11.5px] text-zinc-800 outline-none"
+          />
+          <span className="text-[11px] text-zinc-400">°</span>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

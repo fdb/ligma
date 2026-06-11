@@ -16,6 +16,11 @@ export interface PathAnchor {
 export interface Paint {
   color: string;
   opacity: number;
+  /** "solid" or "linear". */
+  kind: string;
+  stops: { position: number; color: string }[];
+  /** Gradient direction in degrees; 0 → right, 90 → down. */
+  angle: number;
 }
 
 export type ExportFormat = "png" | "svg";

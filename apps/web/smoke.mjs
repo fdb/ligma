@@ -953,6 +953,34 @@ assert(svgF.includes("<clipPath id=") && svgF.includes("clip-path="), "frame SVG
 assert(ef.node_at(250, 70) == null, "child overhang outside the frame is not clickable");
 assert(ef.node_at(170, 70) === cidF, "child inside the frame stays clickable");
 
+// Linear gradients: setter, round-trip, SVG paint server, solid revert.
+const eg = new Engine();
+eg.set_tool("rect");
+eg.pointer_down(0, 0, false, false);
+eg.pointer_move(200, 100);
+eg.pointer_up();
+const gid = JSON.parse(eg.scene()).nodes[0].id;
+eg.set_paint_gradient(gid, 0, 45, JSON.stringify([
+  { position: 0, color: "#ff0000" },
+  { position: 1, color: "#0000ff" },
+]));
+let gp = JSON.parse(eg.scene()).nodes[0].fills[0];
+assert(gp.kind === "linear" && gp.stops.length === 2 && gp.angle === 45, "gradient applies");
+assert(gp.color === "#ff0000", "swatch fallback tracks the first stop");
+eg.set_paint_gradient(gid, 0, 0, JSON.stringify([{ position: 0, color: "#fff" }]));
+assert(JSON.parse(eg.scene()).nodes[0].fills[0].stops.length === 2, "single-stop input rejected");
+const gsvg = eg.export_svg(gid);
+assert(gsvg.includes("<linearGradient id=") && gsvg.includes('fill="url(#'), "SVG emits a paint server");
+assert(gsvg.includes('stop-color="#ff0000"') && gsvg.includes('stop-color="#0000ff"'), "SVG carries both stops");
+const eg2 = new Engine();
+eg2.load_json(eg.to_json());
+assert(JSON.parse(eg2.scene()).nodes[0].fills[0].kind === "linear", "gradient round-trips");
+eg.update_paint(gid, "fills", 0, "#00ff00", 1);
+gp = JSON.parse(eg.scene()).nodes[0].fills[0];
+assert(gp.kind === "solid" && gp.stops.length === 0, "picking a flat color reverts to solid");
+eg.undo();
+assert(JSON.parse(eg.scene()).nodes[0].fills[0].kind === "linear", "solid revert is undoable");
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");
