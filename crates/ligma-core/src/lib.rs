@@ -56,6 +56,9 @@ pub struct Span {
     pub bold: bool,
     #[serde(default)]
     pub italic: bool,
+    /// Fill override for the run; empty = the node's own fill color.
+    #[serde(default)]
+    pub color: String,
 }
 
 /// A gradient color stop at a 0..1 position along the gradient axis.
@@ -487,31 +490,34 @@ fn path_hit(n: &Node, x: f64, y: f64, tol: f64) -> bool {
     !n.fills.is_empty() && inside
 }
 
-/// Re-encodes a per-char (bold, italic) map as minimal spans.
-fn run_length_spans(styles: &[(bool, bool)]) -> Vec<Span> {
+/// Re-encodes a per-char (bold, italic, color) map as minimal spans.
+fn run_length_spans(styles: &[(bool, bool, String)]) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut i = 0;
     while i < styles.len() {
-        let (b, it) = styles[i];
+        let (b, it, col) = styles[i].clone();
         let start = i;
-        while i < styles.len() && styles[i] == (b, it) {
+        while i < styles.len() && styles[i] == (b, it, col.clone()) {
             i += 1;
         }
-        if b || it {
-            spans.push(Span { start, len: i - start, bold: b, italic: it });
+        if b || it || !col.is_empty() {
+            spans.push(Span { start, len: i - start, bold: b, italic: it, color: col });
         }
     }
     spans
 }
 
 /// The per-char style map for a text node (resolved from its spans).
-fn char_styles(n: &Node) -> Vec<(bool, bool)> {
+fn char_styles(n: &Node) -> Vec<(bool, bool, String)> {
     let chars = n.text.chars().count();
-    let mut styles = vec![(false, false); chars];
+    let mut styles = vec![(false, false, String::new()); chars];
     for s in &n.spans {
         for c in styles.iter_mut().skip(s.start).take(s.len) {
             c.0 |= s.bold;
             c.1 |= s.italic;
+            if !s.color.is_empty() {
+                c.2 = s.color.clone();
+            }
         }
     }
     styles
@@ -519,13 +525,18 @@ fn char_styles(n: &Node) -> Vec<(bool, bool)> {
 
 /// Splits one wrapped line (starting at char `off` in the node's text)
 /// into maximal same-style segments.
-fn line_segments(styles: &[(bool, bool)], line: &str, off: usize) -> Vec<(String, bool, bool)> {
-    let mut segs: Vec<(String, bool, bool)> = Vec::new();
+fn line_segments(
+    styles: &[(bool, bool, String)],
+    line: &str,
+    off: usize,
+) -> Vec<(String, bool, bool, String)> {
+    let mut segs: Vec<(String, bool, bool, String)> = Vec::new();
     for (i, ch) in line.chars().enumerate() {
-        let (b, it) = styles.get(off + i).copied().unwrap_or((false, false));
+        let (b, it, col) =
+            styles.get(off + i).cloned().unwrap_or((false, false, String::new()));
         match segs.last_mut() {
-            Some(s) if s.1 == b && s.2 == it => s.0.push(ch),
-            _ => segs.push((ch.to_string(), b, it)),
+            Some(s) if s.1 == b && s.2 == it && s.3 == col => s.0.push(ch),
+            _ => segs.push((ch.to_string(), b, it, col)),
         }
     }
     segs
@@ -2341,19 +2352,30 @@ impl Engine {
         self.snapshot_now();
         if let Some(n) = find_node_mut(&mut self.nodes, id) {
             let chars = n.text.chars().count();
-            let mut styles = vec![(false, false); chars];
-            for s in &n.spans {
-                for c in styles.iter_mut().skip(s.start).take(s.len) {
-                    c.0 |= s.bold;
-                    c.1 |= s.italic;
-                }
-            }
+            let mut styles = char_styles(n);
             for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
                 if field == "bold" {
                     c.0 = on;
                 } else {
                     c.1 = on;
                 }
+            }
+            n.spans = run_length_spans(&styles);
+        }
+        self.touch();
+    }
+
+    /// Sets (or clears, with "") the fill-color override on a char range.
+    pub fn set_span_color(&mut self, id: u32, start: usize, len: usize, color: &str) {
+        if len == 0 || color.len() > 32 || color.contains(['<', '"', ';']) {
+            return;
+        }
+        self.snapshot_now();
+        if let Some(n) = find_node_mut(&mut self.nodes, id) {
+            let chars = n.text.chars().count();
+            let mut styles = char_styles(n);
+            for c in styles.iter_mut().skip(start).take(len.min(chars.saturating_sub(start))) {
+                c.2 = color.to_string();
             }
             n.spans = run_length_spans(&styles);
         }
@@ -3727,7 +3749,7 @@ fn draw_node(
                 off += line.chars().count() + 1; // +1: the break char
                 let widths: Vec<f64> = segs
                     .iter()
-                    .map(|(s, b, it)| {
+                    .map(|(s, b, it, _)| {
                         ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
                         ctx.measure_text(s).map(|m| m.width()).unwrap_or(0.0)
                     })
@@ -3738,11 +3760,11 @@ fn draw_node(
                     "right" => n.x + n.w - total,
                     _ => n.x,
                 };
-                for ((seg, b, it), w) in segs.iter().zip(&widths) {
+                for ((seg, b, it, col), w) in segs.iter().zip(&widths) {
                     ctx.set_font(&font_spec(n.font_size, &n.font_family, *b, *it));
                     for p in &n.fills {
                         ctx.set_global_alpha(alpha * p.opacity);
-                        ctx.set_fill_style_str(&p.color);
+                        ctx.set_fill_style_str(if col.is_empty() { &p.color } else { col });
                         let _ = ctx.fill_text(seg, tx, ty);
                     }
                     for p in &n.strokes {
@@ -4093,10 +4115,15 @@ fn svg_node(
                     // Baseline approximation: ~0.8em below the em top.
                     let ty = y0 + i as f64 * lh + (lh - n.font_size) / 2.0 + n.font_size * 0.8;
                     let mut body = String::new();
-                    for (seg, b, it) in line_segments(&styles, line, off) {
-                        if b || it {
+                    for (seg, b, it, col) in line_segments(&styles, line, off) {
+                        if b || it || !col.is_empty() {
+                            let fill = if col.is_empty() {
+                                String::new()
+                            } else {
+                                format!(r#" fill="{}""#, xml_escape(&col))
+                            };
                             body.push_str(&format!(
-                                r#"<tspan{}{}>{}</tspan>"#,
+                                r#"<tspan{}{}{fill}>{}</tspan>"#,
                                 if b { r#" font-weight="700""# } else { "" },
                                 if it { r#" font-style="italic""# } else { "" },
                                 xml_escape(&seg)

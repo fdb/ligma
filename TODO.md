@@ -1,7 +1,7 @@
 # TODO / FEATURE WISHLIST
 
 - Code architecture: all code is now in one lib.rs. Can we start thinking about splitting this up into multiple files? 
-- Text spans: per-span font family, size and color (bold/italic spans shipped); show styling live inside the inline editor overlay
+- Text spans: per-span font family and size (bold/italic/color shipped); show styling live inside the inline editor overlay
 - work more on refining the design: tighten up in some spaces, where you can, make the UI feel nice and usable
 - pathfinder ops on 3+ shapes at once and on shapes with holes (pairwise union/subtract/intersect shipped; curves are flattened through the clipper); outline stroke with round joins/caps and open-path support (mitered closed outlines shipped)
 - pathfinder operations stay non-destructive: they appear as a group, with the source shapes inside, until flattened
@@ -14,6 +14,8 @@
 - If you start typing in a text item, it will still display the previous text, so the two texts will overlap until you press enter or escape
 
 # DONE (things are moved here once they are done)
+
+- Rich text, part 2 — span colors + floating text toolbar: while editing, a toolbar hovers above the text with B/I buttons and color dots that style the current selection (buttons keep the textarea's selection alive); colored runs render on canvas, export as tspan fills, and clear via the white dot
 
 - Radial gradient fills: the fill-type toggle cycles solid → linear → radial (center-out across the node, matching SVG paint server on export)
 - Linear gradient fills: toggle any fill between solid and a linear gradient (stop hex inputs + angle in the panel, gradient preview in the swatch); rendered across the node's bounding box on canvas and as an SVG paint server, persisted with the document; picking a flat color reverts to solid

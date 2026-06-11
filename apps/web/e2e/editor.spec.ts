@@ -1208,14 +1208,14 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
   await page.keyboard.press("Escape");
 
   let s = await sceneOf(page);
-  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 3, bold: true, italic: false }]);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 3, bold: true, italic: false, color: "" }]);
   // Bold glyphs carry more ink.
   await expect.poll(darkPixels).toBeGreaterThan(before);
 
   // The panel's B button styles the whole text; clicking again clears.
   await page.getByTestId("text-bold").click();
   s = await sceneOf(page);
-  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 4, bold: true, italic: false }]);
+  expect(s.nodes[0].spans).toEqual([{ start: 0, len: 4, bold: true, italic: false, color: "" }]);
   await page.getByTestId("text-bold").click();
   s = await sceneOf(page);
   expect(s.nodes[0].spans).toEqual([]);
@@ -1228,7 +1228,7 @@ test("rich text: ⌘B styles the selection; panel buttons style all", async ({ p
   await expect(layers(page).getByText("Text 1")).toBeVisible();
   await expect
     .poll(async () => (await sceneOf(page)).nodes[0].spans)
-    .toEqual([{ start: 0, len: 4, bold: false, italic: true }]);
+    .toEqual([{ start: 0, len: 4, bold: false, italic: true, color: "" }]);
 });
 
 test("frames clip their children's rendering", async ({ page }) => {
@@ -1312,4 +1312,36 @@ test("linear gradient fills: toggle, render across the axis, persist", async ({ 
     .toBeGreaterThan(180);
   await page.getByTestId("gradient-toggle-0").click();
   expect((await sceneOf(page)).nodes[0].fills[0].kind).toBe("solid");
+});
+
+test("text toolbar: color dots tint the selection", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 300);
+  await page.keyboard.press("Escape");
+
+  const box = await canvasBox(page);
+  await page.mouse.dblclick(box.x + 305, box.y + 300);
+  await expect(page.getByTestId("text-toolbar")).toBeVisible();
+  const editor = page.getByTestId("text-editor");
+  await editor.evaluate((ta: HTMLTextAreaElement) => ta.setSelectionRange(0, 4));
+  await page.getByTestId("span-color-ef4444").click();
+  await page.keyboard.press("Escape");
+
+  const s = await sceneOf(page);
+  expect(s.nodes[0].spans).toEqual([
+    { start: 0, len: 4, bold: false, italic: false, color: "#ef4444" },
+  ]);
+
+  // Red ink actually lands on the canvas.
+  const redPixels = () =>
+    page.evaluate(() => {
+      const canvas = document.querySelector("canvas")!;
+      const d = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4)
+        if (d[i] > 180 && d[i + 1] < 120 && d[i + 2] < 120) n++;
+      return n;
+    });
+  await expect.poll(redPixels).toBeGreaterThan(0);
 });

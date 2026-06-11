@@ -933,6 +933,18 @@ assert(JSON.parse(es2.scene()).nodes[0].spans.length === 1, "spans round-trip th
 const svgT = es.export_svg(tid);
 assert(svgT.includes('<tspan font-weight="700">wo</tspan>'), "SVG export emits bold tspans");
 
+// Per-span color: applies, merges with bold, exports, clears.
+es.set_span_color(tid, 0, 5, "#ff0000");
+let spc = JSON.parse(es.scene()).nodes[0].spans;
+assert(spc.some((s) => s.color === "#ff0000" && s.start === 0 && s.len === 5), "span color applies");
+const svgC = es.export_svg(tid);
+assert(svgC.includes('fill="#ff0000"'), "SVG tspan carries the color");
+es.set_span_color(tid, 0, 5, "");
+spc = JSON.parse(es.scene()).nodes[0].spans;
+assert(!spc.some((s) => s.color === "#ff0000"), "empty color clears the override");
+es.set_span_color(tid, 0, 5, 'red";<evil');
+assert(!JSON.parse(es.scene()).nodes[0].spans.some((s) => s.color.includes("<")), "hostile colors rejected");
+
 // Frame clipping: SVG wraps children in a clipPath; overhang is
 // unreachable by hit-testing (it falls outside the frame).
 const ef = new Engine();

@@ -468,7 +468,76 @@ export function CanvasView({
                 : boxTop + (boxH - block) / 2;
           const top =
             y0 + (slh - fs) / 2 + m.emAscent - (slh - m.fbAscent - m.fbDescent) / 2 - m.fbAscent;
+          // Style the textarea's current selection. Toolbar buttons keep
+          // the textarea focused (pointerdown is prevented), so the
+          // selection survives the click.
+          const styleSelection = (
+            apply: (id: number, start: number, len: number) => void,
+          ) => {
+            const ta = document.querySelector<HTMLTextAreaElement>(
+              '[data-testid="text-editor"]',
+            );
+            if (!ta) return;
+            const [start, end] = [ta.selectionStart, ta.selectionEnd];
+            if (start === end) return;
+            engine.set_text(overlayNode.id, ta.value);
+            apply(overlayNode.id, start, end - start);
+          };
+          const toggleSpan = (field: "bold" | "italic", start: number, end: number) => {
+            const live: Scene = JSON.parse(engine.scene());
+            const node = findNode(live.nodes, overlayNode.id);
+            const allOn = !!node?.spans.some(
+              (s) =>
+                s.start <= start &&
+                s.start + s.len >= end &&
+                (field === "bold" ? s.bold : s.italic),
+            );
+            engine.set_span_style(overlayNode.id, start, end - start, field, !allOn);
+          };
+          const SPAN_COLORS = ["#18181b", "#ef4444", "#f59e0b", "#22c55e", "#0ea5e9", ""];
           return (
+            <>
+            <div
+              data-testid="text-toolbar"
+              className="absolute z-10 flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-1.5 py-1 shadow-md"
+              style={{
+                left: overlayNode.x * scene.zoom + scene.panX,
+                top: top - 38,
+              }}
+              onPointerDown={(e) => e.preventDefault()}
+            >
+              {(["bold", "italic"] as const).map((f) => (
+                <button
+                  key={f}
+                  title={f === "bold" ? "Bold (⌘B)" : "Italic (⌘I)"}
+                  onClick={() =>
+                    styleSelection((_, start, len) => toggleSpan(f, start, start + len))
+                  }
+                  className="flex size-6 items-center justify-center rounded text-[12px] text-zinc-600 hover:bg-zinc-100"
+                >
+                  <span className={f === "bold" ? "font-bold" : "italic"}>
+                    {f === "bold" ? "B" : "I"}
+                  </span>
+                </button>
+              ))}
+              <span className="mx-0.5 h-4 w-px bg-zinc-200" />
+              {SPAN_COLORS.map((c) => (
+                <button
+                  key={c || "clear"}
+                  data-testid={`span-color-${c.replace("#", "") || "clear"}`}
+                  title={c ? `Color ${c}` : "Clear color"}
+                  onClick={() =>
+                    styleSelection((id, start, len) => engine.set_span_color(id, start, len, c))
+                  }
+                  className="flex size-6 items-center justify-center rounded hover:bg-zinc-100"
+                >
+                  <span
+                    className={`block size-3.5 rounded-full ${c ? "" : "border border-zinc-300 bg-white"}`}
+                    style={c ? { background: c } : undefined}
+                  />
+                </button>
+              ))}
+            </div>
             <textarea
               autoFocus
               data-testid="text-editor"
@@ -486,20 +555,7 @@ export function CanvasView({
                 if ((e.metaKey || e.ctrlKey) && ["b", "i"].includes(e.key.toLowerCase())) {
                   e.preventDefault();
                   const field = e.key.toLowerCase() === "b" ? "bold" : "italic";
-                  const ta = e.currentTarget;
-                  const [start, end] = [ta.selectionStart, ta.selectionEnd];
-                  if (start === end) return;
-                  // Commit the draft first so offsets address the same text.
-                  engine.set_text(overlayNode.id, ta.value);
-                  const live: Scene = JSON.parse(engine.scene());
-                  const node = findNode(live.nodes, overlayNode.id);
-                  const allOn = !!node?.spans.some(
-                    (s) =>
-                      s.start <= start &&
-                      s.start + s.len >= end &&
-                      (field === "bold" ? s.bold : s.italic),
-                  );
-                  engine.set_span_style(overlayNode.id, start, end - start, field, !allOn);
+                  styleSelection((_, start, len) => toggleSpan(field, start, start + len));
                 }
                 e.stopPropagation();
               }}
@@ -517,6 +573,7 @@ export function CanvasView({
                 color: overlayNode.fills[0]?.color ?? "#18181b",
               }}
             />
+            </>
           );
         })()}
       {overlay && overlayNode && overlay.kind === "name" && (
