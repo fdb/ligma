@@ -894,6 +894,107 @@ assert(JSON.parse(ed.scene()).nodes[0].inner.length === 1, "disjoint union flatt
 ed.boolean_selection("union"); // needs exactly 2 selected: no-op
 assert(JSON.parse(ed.scene()).nodes.length === 1, "boolean with one node selected is a no-op");
 
+// Pathfinder on 3+ shapes and on shapes with holes.
+const e3p = new Engine();
+const d3p = (x1, y1, x2, y2) => {
+  e3p.set_tool("rect");
+  e3p.pointer_down(x1, y1, false, false);
+  e3p.pointer_move(x2, y2);
+  e3p.pointer_up();
+};
+const selAll3 = () => {
+  const ids = JSON.parse(e3p.scene()).nodes.map((n) => n.id);
+  ids.forEach((id, i) => e3p.select(id, i > 0));
+};
+// Union of three aligned rects in a row -> one solid bar.
+d3p(0, 0, 100, 100);
+d3p(80, 0, 180, 100);
+d3p(160, 0, 260, 100);
+selAll3();
+e3p.boolean_selection("union");
+{
+  const b = JSON.parse(e3p.scene()).nodes[0];
+  assert(b.children.length === 3, "3-shape boolean keeps all sources inside");
+  assert(
+    [50, 130, 210].every((x) => e3p.node_at(x, 50) === b.id),
+    "3-shape union is solid across all three",
+  );
+  e3p.flatten_selection();
+  assert(
+    JSON.parse(e3p.scene()).nodes[0].inner.length === 0,
+    "3-shape union flattens to a single contour",
+  );
+  e3p.undo();
+  e3p.undo();
+}
+// Subtract two cutters from one slab -> two holes.
+selAll3();
+e3p.boolean_selection("subtract");
+{
+  const b = JSON.parse(e3p.scene()).nodes[0];
+  assert(
+    e3p.node_at(90, 50) == null && e3p.node_at(170, 50) == null && e3p.node_at(20, 50) === b.id,
+    "subtracting two shapes carves both",
+  );
+  e3p.undo();
+}
+// A flattened donut (path with a hole) participates with its hole intact.
+const edo = new Engine();
+const ddo = (x1, y1, x2, y2) => {
+  edo.set_tool("rect");
+  edo.pointer_down(x1, y1, false, false);
+  edo.pointer_move(x2, y2);
+  edo.pointer_up();
+};
+ddo(100, 100, 300, 300);
+ddo(150, 150, 250, 250);
+{
+  const ids = JSON.parse(edo.scene()).nodes.map((n) => n.id);
+  edo.select(ids[0], false);
+  edo.select(ids[1], true);
+}
+edo.boolean_selection("subtract");
+edo.flatten_selection(); // a real path with one inner contour
+ddo(0, 0, 400, 400);
+{
+  const nodes = JSON.parse(edo.scene()).nodes;
+  const big = nodes.find((n) => n.kind === "rect");
+  edo.select(big.id, false);
+  edo.send_to_back();
+  const donut = nodes.find((n) => n.kind === "path");
+  edo.select(big.id, false);
+  edo.select(donut.id, true);
+  edo.boolean_selection("subtract");
+  const b = JSON.parse(edo.scene()).nodes[0];
+  assert(
+    edo.node_at(120, 200) == null && edo.node_at(200, 200) === b.id && edo.node_at(350, 350) === b.id,
+    "subtracting a donut keeps its hole solid (region parity)",
+  );
+}
+// Tiles that exactly share an edge union into one solid.
+const etu = new Engine();
+const dtu = (x1, y1, x2, y2) => {
+  etu.set_tool("rect");
+  etu.pointer_down(x1, y1, false, false);
+  etu.pointer_move(x2, y2);
+  etu.pointer_up();
+};
+dtu(0, 0, 100, 100);
+dtu(100, 0, 200, 100);
+{
+  const ids = JSON.parse(etu.scene()).nodes.map((n) => n.id);
+  etu.select(ids[0], false);
+  etu.select(ids[1], true);
+}
+etu.boolean_selection("union");
+{
+  const b = JSON.parse(etu.scene()).nodes[0];
+  assert(
+    etu.node_at(50, 50) === b.id && etu.node_at(150, 50) === b.id,
+    "union of exactly-touching tiles covers both",
+  );
+}
+
 // Outline stroke: a stroked rect becomes a ring path (even-odd).
 const eo = new Engine();
 eo.set_tool("rect");

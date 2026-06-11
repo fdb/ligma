@@ -191,17 +191,17 @@ export function TopBar({
         "---",
         {
           label: "Union",
-          disabled: scene.selection.length !== 2,
+          disabled: scene.selection.length < 2,
           action: () => engine.boolean_selection("union"),
         },
         {
           label: "Subtract",
-          disabled: scene.selection.length !== 2,
+          disabled: scene.selection.length < 2,
           action: () => engine.boolean_selection("subtract"),
         },
         {
           label: "Intersect",
-          disabled: scene.selection.length !== 2,
+          disabled: scene.selection.length < 2,
           action: () => engine.boolean_selection("intersect"),
         },
         {

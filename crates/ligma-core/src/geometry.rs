@@ -1,7 +1,7 @@
 //! Vector geometry: bezier flattening, path bounds and hit-testing,
 //! shape outline contours, and the live boolean-group result.
 
-use crate::clip::polygon_clip;
+use crate::clip::region_clip;
 use crate::{Anchor, Node, NodeKind};
 
 /// Samples per bezier segment when flattening (bounds, hit-testing).
@@ -198,38 +198,52 @@ pub(crate) fn collect_contours(n: &Node, out: &mut Vec<Vec<Anchor>>) {
     }
 }
 
-/// The clip result of a bool node's children, as flattened polygon rings
-/// filled under the even-odd rule. The first visible child is the
-/// subject; each later child clips into it (single-outline scope, like
-/// the pathfinder commands).
-pub(crate) fn bool_rings(n: &Node) -> Vec<Vec<(f64, f64)>> {
-    let opcode = match n.bool_op.as_str() {
+pub(crate) fn bool_opcode(op: &str) -> u8 {
+    match op {
         "intersect" => 0,
         "subtract" => 2,
         _ => 1, // union
-    };
-    let outline = |c: &Node| -> Option<Vec<(f64, f64)>> {
-        let mut contours = Vec::new();
-        collect_contours(c, &mut contours);
-        let first = contours.into_iter().find(|c| c.len() >= 2)?;
-        Some(flatten_path(&first, true))
-    };
-    let mut rings: Vec<Vec<(f64, f64)>> = Vec::new();
-    for c in n.children.iter().filter(|c| c.visible) {
-        let Some(poly) = outline(c) else { continue };
-        if rings.is_empty() {
-            rings.push(poly);
-        } else {
-            let base = rings.remove(0);
-            let mut out = polygon_clip(&base, &poly, opcode);
-            if out.is_empty() {
-                rings.clear();
-            } else {
-                out.append(&mut rings);
-                rings = out;
-            }
-        }
     }
-    rings
+}
+
+/// A node's outline as an even-odd region: every contour (including a
+/// path's holes, a group's members, or a nested boolean's result),
+/// flattened to polygon rings.
+pub(crate) fn node_region(n: &Node) -> Vec<Vec<(f64, f64)>> {
+    let mut contours = Vec::new();
+    collect_contours(n, &mut contours);
+    contours
+        .iter()
+        .filter(|c| c.len() >= 2)
+        .map(|c| flatten_path(c, true))
+        .collect()
+}
+
+/// Folds a list of regions through one boolean op, in order: the first
+/// is the subject, each later one clips into the accumulated result.
+pub(crate) fn fold_regions(regions: Vec<Vec<Vec<(f64, f64)>>>, opcode: u8) -> Vec<Vec<(f64, f64)>> {
+    let mut acc: Option<Vec<Vec<(f64, f64)>>> = None;
+    for region in regions {
+        if region.is_empty() {
+            continue;
+        }
+        acc = Some(match acc {
+            None => region,
+            Some(base) => region_clip(&base, &region, opcode),
+        });
+    }
+    acc.unwrap_or_default()
+}
+
+/// The clip result of a bool node's children, as flattened polygon rings
+/// filled under the even-odd rule. The first visible child is the
+/// subject; each later child clips into the accumulated result, so 3+
+/// children and shapes with holes both work.
+pub(crate) fn bool_rings(n: &Node) -> Vec<Vec<(f64, f64)>> {
+    let opcode = bool_opcode(&n.bool_op);
+    fold_regions(
+        n.children.iter().filter(|c| c.visible).map(node_region).collect(),
+        opcode,
+    )
 }
 

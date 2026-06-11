@@ -328,17 +328,17 @@ export function CanvasView({
       "---",
       {
         label: "Union",
-        disabled: sel.length !== 2,
+        disabled: sel.length < 2,
         action: () => engine.boolean_selection("union"),
       },
       {
         label: "Subtract",
-        disabled: sel.length !== 2,
+        disabled: sel.length < 2,
         action: () => engine.boolean_selection("subtract"),
       },
       {
         label: "Intersect",
-        disabled: sel.length !== 2,
+        disabled: sel.length < 2,
         action: () => engine.boolean_selection("intersect"),
       },
       {

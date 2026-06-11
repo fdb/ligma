@@ -1713,3 +1713,55 @@ test("frame-interior drag marquees children; document colors fill the picker", a
     })
     .toEqual(["#ff0000", "#ff0000"]);
 });
+
+test("pathfinder handles 3 shapes and preserves holes", async ({ page }) => {
+  await openNewDocument(page);
+  const box = await canvasBox(page);
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // Three rects in a row, overlapping their neighbors.
+  await page.keyboard.press("r");
+  await drag(page, 200, 200, 300, 300);
+  await page.keyboard.press("r");
+  await drag(page, 280, 200, 380, 300);
+  await page.keyboard.press("r");
+  await drag(page, 360, 200, 460, 300);
+  await clickCanvas(page, 220, 250);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 330, 250);
+  await clickCanvas(page, 440, 250);
+  await page.keyboard.up("Shift");
+  await page.mouse.click(box.x + 220, box.y + 250, { button: "right" });
+  await page.getByTestId("context-menu").getByText("Union").click();
+  await expect
+    .poll(async () => {
+      const s = await sceneOf(page);
+      return [s.nodes.length, s.nodes[0].kind, s.nodes[0].children.length];
+    })
+    .toEqual([1, "bool", 3]);
+  // Solid across the whole bar.
+  for (const x of [220, 330, 440]) {
+    await expect.poll(() => pixelAt(x, 250)).toEqual([212, 212, 216]);
+  }
+
+  // Subtract both top shapes from the bottom one instead: undo, reselect.
+  await page.keyboard.press("Meta+z");
+  await clickCanvas(page, 220, 250);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 330, 250);
+  await clickCanvas(page, 440, 250);
+  await page.keyboard.up("Shift");
+  await page.mouse.click(box.x + 220, box.y + 250, { button: "right" });
+  await page.getByTestId("context-menu").getByText("Subtract").click();
+  // Only the part of rect 1 not covered by rects 2/3 remains.
+  await expect.poll(() => pixelAt(220, 250)).toEqual([212, 212, 216]);
+  await expect.poll(() => pixelAt(330, 250)).toEqual([233, 233, 236]);
+  await expect.poll(() => pixelAt(440, 250)).toEqual([233, 233, 236]);
+});

@@ -1900,31 +1900,27 @@ impl Engine {
             "subtract" => 2,
             _ => return,
         };
-        if self.selection.len() != 2 {
+        if self.selection.len() < 2 {
             return;
         }
-        // Subject = the lower shape in z-order (Figma semantics).
-        let (mut sa, mut sb) = (self.selection[0], self.selection[1]);
-        let (pa, pb) = match (path_to(&self.nodes, sa), path_to(&self.nodes, sb)) {
-            (Some(a), Some(b)) => (a, b),
-            _ => return,
-        };
-        if pb < pa {
-            std::mem::swap(&mut sa, &mut sb);
-        }
-        let outline = |id: u32, nodes: &[Node]| -> Option<Vec<(f64, f64)>> {
-            let n = find_node(nodes, id)?;
-            let mut contours = Vec::new();
-            collect_contours(n, &mut contours);
-            let first = contours.into_iter().find(|c| c.len() >= 2)?;
-            Some(flatten_path(&first, true))
-        };
-        let (Some(poly_a), Some(poly_b)) = (outline(sa, &self.nodes), outline(sb, &self.nodes))
-        else {
+        // Subject = the lowest shape in z-order (Figma semantics); the
+        // others clip into the accumulated result from bottom to top.
+        let mut ordered: Vec<(Vec<usize>, u32)> = self
+            .selection
+            .iter()
+            .filter_map(|&id| path_to(&self.nodes, id).map(|p| (p, id)))
+            .collect();
+        if ordered.len() < 2 {
             return;
-        };
-        let out = polygon_clip(&poly_a, &poly_b, opcode);
-        if out.is_empty() {
+        }
+        ordered.sort();
+        let ids: Vec<u32> = ordered.into_iter().map(|(_, id)| id).collect();
+        let sa = ids[0];
+        let regions: Vec<Vec<Vec<(f64, f64)>>> = ids
+            .iter()
+            .filter_map(|&id| find_node(&self.nodes, id).map(node_region))
+            .collect();
+        if fold_regions(regions, opcode).is_empty() {
             return;
         }
         self.snapshot_now();
@@ -1982,8 +1978,8 @@ impl Engine {
         };
         let list = list_at(&mut self.nodes, &insert_path);
         list.insert(insert_at.min(list.len()), node);
-        // Move the sources inside, subject (lower z) first.
-        for sid in [sa, sb] {
+        // Move the sources inside, subject (lowest z) first.
+        for sid in ids {
             if let Some(p) = path_to(&self.nodes, sid) {
                 let i = *p.last().unwrap();
                 let child = list_at(&mut self.nodes, &p).remove(i);

@@ -79,95 +79,175 @@ pub(crate) fn gh_ring(verts: &mut Vec<GhVert>, poly: &[(f64, f64)]) -> usize {
     base
 }
 
-/// Pairwise boolean of two simple polygons. Output contours render under
-/// the even-odd rule, so holes and disjoint pieces both come out right.
+/// Even-odd containment over a whole ring set.
+pub(crate) fn point_in_region(region: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
+    let mut inside = false;
+    for ring in region {
+        if point_in_polygon(ring, x, y) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Boolean of two even-odd regions, each a set of rings (outer shells and
+/// holes alike — parity decides what's solid). Greiner-Hormann on every
+/// ring pair; rings that never cross the other region are kept or dropped
+/// whole by containment. Output renders under the even-odd rule.
 /// op: 0 = intersect, 1 = union, 2 = a minus b.
-pub(crate) fn polygon_clip(pa: &[(f64, f64)], pb: &[(f64, f64)], op: u8) -> Vec<Vec<(f64, f64)>> {
-    let mut a = simplify_polygon(pa);
-    let mut b = simplify_polygon(pb);
-    if a.len() < 3 || b.len() < 3 {
-        return Vec::new();
+pub(crate) fn region_clip(
+    ra: &[Vec<(f64, f64)>],
+    rb: &[Vec<(f64, f64)>],
+    op: u8,
+) -> Vec<Vec<(f64, f64)>> {
+    // Snap every exit to a 1e-3 grid: the tie-breaking nudge below is 5×
+    // finer than half a cell, so clean coordinates round back exactly,
+    // and 0.001px is far below anything visible.
+    region_clip_raw(ra, rb, op)
+        .into_iter()
+        .map(|ring| {
+            let snapped: Vec<(f64, f64)> = ring
+                .into_iter()
+                .map(|(x, y)| ((x * 1e3).round() / 1e3, (y * 1e3).round() / 1e3))
+                .collect();
+            simplify_polygon(&snapped)
+        })
+        .filter(|r| r.len() >= 3)
+        .collect()
+}
+
+fn region_clip_raw(
+    ra: &[Vec<(f64, f64)>],
+    rb: &[Vec<(f64, f64)>],
+    op: u8,
+) -> Vec<Vec<(f64, f64)>> {
+    let clean = |r: &[Vec<(f64, f64)>]| -> Vec<Vec<(f64, f64)>> {
+        r.iter()
+            .map(|p| {
+                let mut s = simplify_polygon(p);
+                if signed_area(&s) < 0.0 {
+                    s.reverse();
+                }
+                s
+            })
+            .filter(|s| s.len() >= 3)
+            .collect()
+    };
+    let a = clean(ra);
+    let mut b = clean(rb);
+    if a.is_empty() {
+        return if op == 1 { b } else { Vec::new() };
     }
-    // Normalize to counter-clockwise.
-    if signed_area(&a) < 0.0 {
-        a.reverse();
+    if b.is_empty() {
+        return if op == 0 { Vec::new() } else { a };
     }
-    if signed_area(&b) < 0.0 {
-        b.reverse();
+    // Coincident collinear edges (rampant after edge snapping) yield no
+    // detectable crossings and break the trace. Translating all of B
+    // rigidly by a sub-visual offset breaks the ties without slanting
+    // any edge (a slant would split crossings unevenly around corners
+    // and ruin the even-crossing parity Greiner-Hormann needs); the
+    // 1e-3 output snap above erases the offset again.
+    for ring in &mut b {
+        for p in ring.iter_mut() {
+            p.0 += 1.7e-4;
+            p.1 += 2.3e-4;
+        }
     }
 
     let mut verts: Vec<GhVert> = Vec::new();
-    let ha = gh_ring(&mut verts, &a);
-    let hb = gh_ring(&mut verts, &b);
-    let na = a.len();
+    let heads_a: Vec<usize> = a.iter().map(|r| gh_ring(&mut verts, r)).collect();
+    let heads_b: Vec<usize> = b.iter().map(|r| gh_ring(&mut verts, r)).collect();
 
-    // Find all edge intersections; collect per original edge with the
-    // parametric position so insertion order along the edge is right.
-    let mut hits: Vec<(usize, usize, f64, f64, f64, f64)> = Vec::new(); // (ea, eb, ta, tb, x, y)
-    for i in 0..na {
-        let (a1, a2) = (a[i], a[(i + 1) % na]);
-        for j in 0..b.len() {
-            let (b1, b2) = (b[j], b[(j + 1) % b.len()]);
-            let d = (a2.0 - a1.0) * (b2.1 - b1.1) - (a2.1 - a1.1) * (b2.0 - b1.0);
-            if d.abs() < 1e-12 {
-                continue;
-            }
-            let t = ((b1.0 - a1.0) * (b2.1 - b1.1) - (b1.1 - a1.1) * (b2.0 - b1.0)) / d;
-            let u = ((b1.0 - a1.0) * (a2.1 - a1.1) - (b1.1 - a1.1) * (a2.0 - a1.0)) / d;
-            let eps = 1e-9;
-            if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
-                hits.push((i, j, t, u, a1.0 + t * (a2.0 - a1.0), a1.1 + t * (a2.1 - a1.1)));
+    // Edge intersections between every ring of A and every ring of B,
+    // grouped per original edge with the parametric position so the
+    // splice below inserts them in order along each edge.
+    let mut by_edge_a: Vec<Vec<Vec<(f64, usize)>>> =
+        a.iter().map(|r| vec![Vec::new(); r.len()]).collect();
+    let mut by_edge_b: Vec<Vec<Vec<(f64, usize)>>> =
+        b.iter().map(|r| vec![Vec::new(); r.len()]).collect();
+    let mut crossings_a = vec![0usize; a.len()];
+    let mut crossings_b = vec![0usize; b.len()];
+    for (ri, ring_a) in a.iter().enumerate() {
+        let na = ring_a.len();
+        for i in 0..na {
+            let (a1, a2) = (ring_a[i], ring_a[(i + 1) % na]);
+            for (rj, ring_b) in b.iter().enumerate() {
+                let nb = ring_b.len();
+                for j in 0..nb {
+                    let (b1, b2) = (ring_b[j], ring_b[(j + 1) % nb]);
+                    let d = (a2.0 - a1.0) * (b2.1 - b1.1) - (a2.1 - a1.1) * (b2.0 - b1.0);
+                    if d.abs() < 1e-12 {
+                        continue;
+                    }
+                    let t = ((b1.0 - a1.0) * (b2.1 - b1.1) - (b1.1 - a1.1) * (b2.0 - b1.0)) / d;
+                    let u = ((b1.0 - a1.0) * (a2.1 - a1.1) - (b1.1 - a1.1) * (a2.0 - a1.0)) / d;
+                    let eps = 1e-9;
+                    if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
+                        let (x, y) = (a1.0 + t * (a2.0 - a1.0), a1.1 + t * (a2.1 - a1.1));
+                        let ia = verts.len();
+                        verts.push(GhVert {
+                            x,
+                            y,
+                            next: 0,
+                            prev: 0,
+                            neighbor: ia + 1,
+                            intersect: true,
+                            entry: false,
+                            visited: false,
+                        });
+                        let ib = verts.len();
+                        verts.push(GhVert {
+                            x,
+                            y,
+                            next: 0,
+                            prev: 0,
+                            neighbor: ia,
+                            intersect: true,
+                            entry: false,
+                            visited: false,
+                        });
+                        by_edge_a[ri][i].push((t, ia));
+                        by_edge_b[rj][j].push((u, ib));
+                        crossings_a[ri] += 1;
+                        crossings_b[rj] += 1;
+                    }
+                }
             }
         }
     }
 
-    if hits.is_empty() {
-        // No crossings: containment decides everything.
-        let a_in_b = point_in_polygon(&b, a[0].0, a[0].1);
-        let b_in_a = point_in_polygon(&a, b[0].0, b[0].1);
-        return match op {
-            0 => {
-                if a_in_b {
-                    vec![a]
-                } else if b_in_a {
-                    vec![b]
-                } else {
-                    Vec::new()
-                }
+    // Rings that never cross the other region survive or vanish whole.
+    // (For subtract, a B ring inside A becomes a hole boundary — parity
+    // handles holes-of-holes the same way.)
+    let mut result: Vec<Vec<(f64, f64)>> = Vec::new();
+    for (ri, ring) in a.iter().enumerate() {
+        if crossings_a[ri] == 0 {
+            let inside_b = point_in_region(&b, ring[0].0, ring[0].1);
+            if match op {
+                0 => inside_b,
+                _ => !inside_b,
+            } {
+                result.push(ring.clone());
             }
-            1 => {
-                if a_in_b {
-                    vec![b]
-                } else if b_in_a {
-                    vec![a]
-                } else {
-                    vec![a, b]
-                }
+        }
+    }
+    for (rj, ring) in b.iter().enumerate() {
+        if crossings_b[rj] == 0 {
+            let inside_a = point_in_region(&a, ring[0].0, ring[0].1);
+            if match op {
+                1 => !inside_a,
+                _ => inside_a,
+            } {
+                result.push(ring.clone());
             }
-            _ => {
-                if b_in_a {
-                    vec![a, b] // hole under even-odd
-                } else if a_in_b {
-                    Vec::new()
-                } else {
-                    vec![a]
-                }
-            }
-        };
+        }
+    }
+    if verts.iter().all(|v| !v.intersect) {
+        return result;
     }
 
-    // Insert intersection vertices into both rings, ordered along edges.
-    let mut by_edge_a: Vec<Vec<(f64, usize)>> = vec![Vec::new(); na];
-    let mut by_edge_b: Vec<Vec<(f64, usize)>> = vec![Vec::new(); b.len()];
-    for &(ea, eb, ta, tb, x, y) in &hits {
-        let ia = verts.len();
-        verts.push(GhVert { x, y, next: 0, prev: 0, neighbor: ia + 1, intersect: true, entry: false, visited: false });
-        let ib = verts.len();
-        verts.push(GhVert { x, y, next: 0, prev: 0, neighbor: ia, intersect: true, entry: false, visited: false });
-        by_edge_a[ea].push((ta, ia));
-        by_edge_b[eb].push((tb, ib));
-    }
-    let splice = |verts: &mut Vec<GhVert>, head: usize, n: usize, by_edge: &mut Vec<Vec<(f64, usize)>>| {
+    // Insert intersection vertices into their rings, ordered along edges.
+    let mut splice = |head: usize, by_edge: &mut Vec<Vec<(f64, usize)>>| {
         for (e, list) in by_edge.iter_mut().enumerate() {
             list.sort_by(|p, q| p.0.total_cmp(&q.0));
             let mut after = head + e;
@@ -179,18 +259,23 @@ pub(crate) fn polygon_clip(pa: &[(f64, f64)], pb: &[(f64, f64)], op: u8) -> Vec<
                 verts[nxt].prev = v;
                 after = v;
             }
-            let _ = n;
         }
     };
-    splice(&mut verts, ha, na, &mut by_edge_a);
-    splice(&mut verts, hb, b.len(), &mut by_edge_b);
+    for (ri, head) in heads_a.iter().enumerate() {
+        splice(*head, &mut by_edge_a[ri]);
+    }
+    for (rj, head) in heads_b.iter().enumerate() {
+        splice(*head, &mut by_edge_b[rj]);
+    }
 
-    // Entry/exit flags: walk each ring, toggling containment in the
-    // other polygon. Flipping a ring's flags complements that operand:
-    // intersect flips neither, union flips both, A−B flips A only.
+    // Entry/exit flags: walk each ring, toggling containment in the other
+    // REGION (parity over all of its rings — each crossing flips it).
+    // Flipping a side's flags complements that operand: intersect flips
+    // neither, union flips both, A−B flips A only.
     let (flip_a, flip_b) = (op != 0, op == 1);
-    let mark = |head: usize, other: &[(f64, f64)], flip: bool, verts: &mut Vec<GhVert>| {
-        let mut inside = point_in_polygon(other, verts[head].x, verts[head].y);
+    let mark = |head: usize, other: &[Vec<(f64, f64)>], flip: bool, verts: &mut Vec<GhVert>| {
+        // Heads are original vertices, never intersections.
+        let mut inside = point_in_region(other, verts[head].x, verts[head].y);
         let mut v = verts[head].next;
         loop {
             if verts[v].intersect {
@@ -202,13 +287,15 @@ pub(crate) fn polygon_clip(pa: &[(f64, f64)], pb: &[(f64, f64)], op: u8) -> Vec<
             }
             v = verts[v].next;
         }
-        // head itself is never an intersection (original vertex).
     };
-    mark(ha, &b, flip_a, &mut verts);
-    mark(hb, &a, flip_b, &mut verts);
+    for head in &heads_a {
+        mark(*head, &b, flip_a, &mut verts);
+    }
+    for head in &heads_b {
+        mark(*head, &a, flip_b, &mut verts);
+    }
 
     // Trace result contours.
-    let mut result = Vec::new();
     loop {
         let Some(start) = (0..verts.len()).find(|&i| verts[i].intersect && !verts[i].visited)
         else {
