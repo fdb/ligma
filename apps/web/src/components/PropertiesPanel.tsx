@@ -382,12 +382,8 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="X" title="X position" value={n.x} field="x" {...common} />
           <NumberField label="Y" title="Y position" value={n.y} field="y" {...common} />
-          {!isGroup && (
-            <>
-              <NumberField label="W" title="Width" value={n.w} field="w" min={1} {...common} />
-              <NumberField label="H" title="Height" value={n.h} field="h" min={1} {...common} />
-            </>
-          )}
+          <NumberField label="W" title="Width" value={n.w} field="w" min={1} {...common} />
+          <NumberField label="H" title="Height" value={n.h} field="h" min={1} {...common} />
         </div>
       </Section>
 

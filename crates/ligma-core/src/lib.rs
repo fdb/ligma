@@ -2151,21 +2151,25 @@ impl Engine {
                     let dy = value - n.y;
                     shift_subtree(n, 0.0, dy);
                 }
-                // Resizing a path scales its anchors about the box origin.
-                "w" if n.kind == NodeKind::Path => {
+                // Resizing scales the whole subtree about the box's
+                // top-left, so frame/group children and bezier anchors
+                // follow proportionally (matching handle drags).
+                "w" => {
                     let f = value.max(1.0) / n.w.max(1.0);
                     let (bx, by) = (n.x, n.y);
                     scale_subtree(n, bx, by, bx, by, f, 1.0);
+                    // The ratio round-trip (w * value/w) drifts in floating
+                    // point; the node's own size is the typed value, exactly.
+                    n.w = value.max(1.0);
                     sync_path_bounds(n);
                 }
-                "h" if n.kind == NodeKind::Path => {
+                "h" => {
                     let f = value.max(1.0) / n.h.max(1.0);
                     let (bx, by) = (n.x, n.y);
                     scale_subtree(n, bx, by, bx, by, 1.0, f);
+                    n.h = value.max(1.0);
                     sync_path_bounds(n);
                 }
-                "w" if n.kind != NodeKind::Group => n.w = value.max(1.0),
-                "h" if n.kind != NodeKind::Group => n.h = value.max(1.0),
                 "opacity" => n.opacity = value.clamp(0.0, 1.0),
                 "cornerRadius" => n.corner_radius = value.max(0.0),
                 "fontSize" => n.font_size = value.max(1.0),
@@ -3270,7 +3274,7 @@ impl Engine {
     pub fn render_export(&self, ctx: &CanvasRenderingContext2d, id: u32, scale: f64) {
         if let Some(n) = find_node(&self.nodes, id) {
             let _ = ctx.set_transform(scale, 0.0, 0.0, scale, -n.x * scale, -n.y * scale);
-            draw_node(ctx, n, 1.0, scale, &self.text_layouts, &self.nodes, 0);
+            draw_node(ctx, n, 1.0, scale, &self.text_layouts, &self.nodes, 0, None);
         }
     }
 
@@ -3323,12 +3327,9 @@ impl Engine {
 
         for n in &self.nodes {
             // A text node under inline editing renders in the DOM overlay
-            // instead. (Frames being renamed keep their body; only the
-            // label pass skips them.)
-            if self.editing == Some(n.id) && n.kind == NodeKind::Text {
-                continue;
-            }
-            draw_node(ctx, n, 1.0, self.zoom, &self.text_layouts, &self.nodes, 0);
+            // instead, however deeply nested. (Frames being renamed keep
+            // their body; only the label pass skips them.)
+            draw_node(ctx, n, 1.0, self.zoom, &self.text_layouts, &self.nodes, 0, self.editing);
         }
         ctx.set_global_alpha(1.0);
 
@@ -3757,8 +3758,15 @@ fn draw_node(
     layouts: &RefCell<HashMap<u32, Vec<String>>>,
     root: &[Node],
     depth: u32,
+    skip_text: Option<u32>,
 ) {
     if !n.visible {
+        return;
+    }
+    // A text node under inline editing renders in the DOM overlay
+    // instead — drawing it too would show old and new text on top of
+    // each other while typing.
+    if skip_text == Some(n.id) && n.kind == NodeKind::Text {
         return;
     }
     let alpha = parent_alpha * n.opacity;
@@ -3769,7 +3777,7 @@ fn draw_node(
     match n.kind {
         NodeKind::Group => {
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom, layouts, root, depth);
+                draw_node(ctx, c, alpha, zoom, layouts, root, depth, skip_text);
             }
         }
         NodeKind::Instance => {
@@ -3785,7 +3793,9 @@ fn draw_node(
                     let fy = if m.h > 0.0 { n.h / m.h } else { 1.0 };
                     let _ = ctx.translate(n.x - m.x * fx, n.y - m.y * fy);
                     let _ = ctx.scale(fx, fy);
-                    draw_node(ctx, m, alpha, zoom, layouts, root, depth + 1);
+                    // Instances keep drawing the master's committed text
+                    // even while the master is being edited elsewhere.
+                    draw_node(ctx, m, alpha, zoom, layouts, root, depth + 1, None);
                     ctx.restore();
                 }
                 None => {
@@ -3823,7 +3833,7 @@ fn draw_node(
             rounded_rect_path(ctx, n.x, n.y, n.w, n.h, n.corner_radius);
             ctx.clip();
             for c in &n.children {
-                draw_node(ctx, c, alpha, zoom, layouts, root, depth);
+                draw_node(ctx, c, alpha, zoom, layouts, root, depth, skip_text);
             }
             ctx.restore();
         }

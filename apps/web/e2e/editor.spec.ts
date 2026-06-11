@@ -1417,3 +1417,99 @@ test("components: create master, place instance, master edits propagate", async 
     .poll(async () => (await sceneOf(page)).nodes.map((n: any) => n.kind))
     .toEqual(["component", "instance"]);
 });
+
+test("editing text hides the canvas copy, even inside a frame", async ({ page }) => {
+  await openNewDocument(page);
+  await page.evaluate(() => (document as any).fonts.ready);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 560, 420);
+  await page.keyboard.press("t");
+  await clickCanvas(page, 300, 250); // text node nested in the frame
+  await page.keyboard.press("Escape"); // deselect; selection chrome away
+
+  const box = await canvasBox(page);
+  const s = await sceneOf(page);
+  const n = s.nodes[0].children[0];
+  expect(n.kind).toBe("text");
+  const rect = {
+    x: n.x * s.zoom + s.panX,
+    y: n.y * s.zoom + s.panY,
+    w: n.w * s.zoom,
+    h: n.h * s.zoom,
+  };
+
+  // Dark engine-drawn glyph pixels inside the node's box. getImageData
+  // reads the canvas only, so the DOM textarea (and its caret) never
+  // pollute the count.
+  const glyphPixels = () =>
+    page.evaluate((r) => {
+      const canvas = document.querySelector("canvas")!;
+      const cr = canvas.getBoundingClientRect();
+      const dpr = canvas.width / cr.width;
+      const d = canvas
+        .getContext("2d")!
+        .getImageData(r.x * dpr, r.y * dpr, r.w * dpr, r.h * dpr).data;
+      let dark = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (lum < 100) dark++;
+      }
+      return dark;
+    }, rect);
+
+  await expect.poll(glyphPixels).toBeGreaterThan(20); // "Text" drawn
+
+  // While the overlay edits the node, the canvas stops drawing it: the
+  // glyphs the user sees are the textarea's alone, so typing can't
+  // overlap the stale committed text.
+  await page.mouse.dblclick(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2);
+  await expect(page.getByTestId("text-editor")).toBeVisible();
+  await expect.poll(glyphPixels).toBe(0);
+
+  // Committing brings the (new) text back to the canvas.
+  await page.keyboard.type("Bye");
+  await page.keyboard.press("Escape");
+  await expect.poll(glyphPixels).toBeGreaterThan(20);
+  await expect.poll(async () => (await sceneOf(page)).nodes[0].children[0].text).toBe("Bye");
+});
+
+test("panel W field resizes frame and group contents proportionally", async ({ page }) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 400, 350); // 200x200 frame
+  await page.keyboard.press("r");
+  await drag(page, 250, 200, 300, 250); // 50x50 child at +50,+50
+
+  // Select the frame and double its width through the panel.
+  await page.keyboard.press("Escape");
+  await layers(page).getByText("Frame 1").click();
+  const wField = page.locator("label", { hasText: "W" }).locator("input");
+  await wField.fill("400");
+  await wField.press("Enter");
+  await expect
+    .poll(async () => {
+      const f = (await sceneOf(page)).nodes[0];
+      return [f.w, f.children[0].w, f.children[0].x - f.x];
+    })
+    .toEqual([400, 100, 100]);
+
+  // Groups expose W/H too now, scaling the same way.
+  await page.keyboard.press("r");
+  await drag(page, 700, 150, 750, 200);
+  await page.keyboard.press("r");
+  await drag(page, 760, 150, 800, 200);
+  await clickCanvas(page, 725, 175);
+  await page.keyboard.down("Shift");
+  await clickCanvas(page, 780, 175);
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Meta+g");
+  await expect(layers(page).getByText("Group 1")).toBeVisible();
+  await wField.fill("200");
+  await wField.press("Enter");
+  await expect
+    .poll(async () => {
+      const g = (await sceneOf(page)).nodes.find((n: any) => n.kind === "group");
+      return [g.w, g.children.map((c: any) => c.w)];
+    })
+    .toEqual([200, [100, 80]]);
+});

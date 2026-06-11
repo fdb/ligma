@@ -1094,6 +1094,59 @@ assert(
   "components round-trip through JSON",
 );
 
+// Panel resize (set_field w/h) scales frame and group contents about the
+// top-left, matching what handle drags do.
+const er = new Engine();
+er.set_tool("frame");
+er.pointer_down(100, 100, false, false);
+er.pointer_move(300, 300);
+er.pointer_up();
+er.set_tool("rect");
+er.pointer_down(150, 150, false, false);
+er.pointer_move(200, 200);
+er.pointer_up();
+er.set_tool("select");
+const erFrame = JSON.parse(er.scene()).nodes.find((n) => n.kind === "frame");
+er.set_field(erFrame.id, "w", 400); // 2x
+er.set_field(erFrame.id, "h", 100); // 0.5x
+{
+  const f = JSON.parse(er.scene()).nodes.find((n) => n.kind === "frame");
+  const c = f.children[0];
+  assert(
+    c.x === 200 && c.w === 100 && c.y === 125 && c.h === 25,
+    "frame panel resize scales its children",
+  );
+}
+er.set_tool("rect");
+er.pointer_down(400, 400, false, false);
+er.pointer_move(450, 450);
+er.pointer_up();
+er.set_tool("rect");
+er.pointer_down(460, 400, false, false);
+er.pointer_move(500, 450);
+er.pointer_up();
+er.set_tool("select");
+{
+  const top = JSON.parse(er.scene()).nodes;
+  er.select(top.at(-2).id, false);
+  er.select(top.at(-1).id, true);
+}
+er.group_selection();
+const erGroup = JSON.parse(er.scene()).nodes.find((n) => n.kind === "group");
+er.set_field(erGroup.id, "w", 200); // group was 100 wide -> 2x
+{
+  const g = JSON.parse(er.scene()).nodes.find((n) => n.kind === "group");
+  assert(
+    g.w === 200 && g.children[0].w === 100 && g.children[1].x === 520,
+    "group panel resize scales its children",
+  );
+}
+er.undo();
+assert(
+  JSON.parse(er.scene()).nodes.find((n) => n.kind === "group").w === 100,
+  "panel resize of a group is one undo step",
+);
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");

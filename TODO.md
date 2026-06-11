@@ -11,10 +11,10 @@
 - If a frame is empty dragging inside of a frame drags the frame. if it has one item, dragging inside of it will create a drag selection rectangle to select items of the frame
 - You can also drag the sides of an item to change the width/height, not just the corner points
 - Dragging the corner points should also snap to the frame (e.g. to snap the width to the width of the frame)
-- If you start typing in a text item, it will still display the previous text, so the two texts will overlap until you press enter or escape
-- BUG: Resizing a frame doesn't resize objects in the frame or change their positions! Note that once an item is in a frame, its position will be relative to the position in the frame, starting from the top left. Same with groups.
-
 # DONE (things are moved here once they are done)
+
+- BUG fix: resizing a frame or group through the panel's W/H fields now scales its contents proportionally about the top-left (handle drags already did); groups gained W/H fields in the panel
+- BUG fix: typing in a text item no longer overlaps the previous text — the canvas stops drawing a node while its inline editor is open, even when the node is nested in a frame or group
 
 - Components & instances: ⌥⌘K turns the selection into a component (a frame-like master); "Create instance" places a live instance beside it that renders the master by reference — master edits show up in every instance immediately, instances resize by scaling the mapping, SVG export embeds the transformed master, and a deleted master leaves a placeholder
 
