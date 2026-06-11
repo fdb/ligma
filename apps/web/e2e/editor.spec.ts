@@ -1664,6 +1664,14 @@ test("frame-interior drag marquees children; document colors fill the picker", a
     })
     .toBe("frame");
 
+  // A click on one of the marquee'd children narrows the selection
+  // to it (Figma behavior), so the panel shows its fills.
+  await page.keyboard.press("Escape");
+  await drag(page, 190, 190, 340, 260);
+  await expect.poll(async () => (await sceneOf(page)).selection.length).toBe(2);
+  await clickCanvas(page, 225, 225);
+  await expect.poll(async () => (await sceneOf(page)).selection.length).toBe(1);
+
   // Color one child red, then apply it to the other through the
   // picker's document-colors row.
   await clickCanvas(page, 225, 225);

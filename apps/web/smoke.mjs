@@ -1294,6 +1294,23 @@ assert(
   "a selected frame still drags by its body",
 );
 
+// A plain click on one node of a multi-selection narrows to it.
+ef9.pointer_down(600, 600, false, false); // deselect the frame first
+ef9.pointer_up();
+ef9.pointer_down(140, 142, false, false);
+ef9.pointer_move(290, 215, false);
+ef9.pointer_up(); // marquee: both children selected again
+assert(JSON.parse(ef9.scene()).selection.length === 2, "marquee re-selects both children");
+ef9.pointer_down(185, 185, false, false); // on the first child, off the handles
+ef9.pointer_up();
+{
+  const s9 = JSON.parse(ef9.scene());
+  assert(
+    s9.selection.length === 1 && s9.selection[0] === s9.nodes[0].children[0].id,
+    "clicking one of several selected nodes narrows the selection",
+  );
+}
+
 // Document colors: most frequent first, includes gradient stops/spans.
 const ec9 = new Engine();
 ec9.set_tool("rect");

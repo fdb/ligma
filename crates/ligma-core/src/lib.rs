@@ -652,6 +652,9 @@ enum Drag {
         oy: f64,
         moved: bool,
         alt_copied: bool,
+        /// The node hit at pointer-down: a click (no drag) on one node of
+        /// a multi-selection narrows the selection to it on release.
+        pressed: u32,
     },
     Resize {
         /// Clones of the selected nodes at drag start; live values are
@@ -1814,7 +1817,14 @@ impl Engine {
                         .iter()
                         .filter_map(|&sid| find_node(&self.nodes, sid).map(|n| (sid, n.x, n.y)))
                         .collect();
-                    self.drag = Drag::Move { starts, ox: x, oy: y, moved: false, alt_copied: alt };
+                    self.drag = Drag::Move {
+                        starts,
+                        ox: x,
+                        oy: y,
+                        moved: false,
+                        alt_copied: alt,
+                        pressed: if shift { 0 } else { id },
+                    };
                 } else {
                     if !shift {
                         self.selection.clear();
@@ -2128,7 +2138,7 @@ impl Engine {
                 self.commit_mutation();
                 self.tool = Tool::Select;
             }
-            Drag::Move { starts, moved, alt_copied, .. } => {
+            Drag::Move { starts, moved, alt_copied, pressed, .. } => {
                 if moved {
                     for (id, _, _) in starts {
                         if let Some(n) = find_node_mut(&mut self.nodes, id) {
@@ -2145,6 +2155,14 @@ impl Engine {
                     }
                 } else {
                     self.pending_undo = None;
+                    // A plain click on one node of a multi-selection
+                    // narrows the selection to it (Figma behavior).
+                    if pressed != 0
+                        && self.selection.len() > 1
+                        && self.selection.contains(&pressed)
+                    {
+                        self.selection = vec![pressed];
+                    }
                 }
             }
             Drag::Resize { starts, .. } => {
