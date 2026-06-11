@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../engine/pkg/ligma_core";
 import type { Scene, SceneNode } from "../types";
 import { Icon } from "./Icon";
@@ -199,6 +199,34 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
   // React re-renders the state set by the preceding dragover.
   const hintRef = useRef<{ id: number; zone: Zone } | null>(null);
   const dragId = useRef<number | null>(null);
+
+  // Selecting a nested layer (canvas click, paste, …) reveals it in the
+  // outliner by expanding its ancestor rows, Figma-style. Keyed on the
+  // selection's content: scene snapshots arrive every generation, and
+  // re-running on hover would fight a deliberate collapse.
+  const prevSelection = useRef("");
+  useEffect(() => {
+    const ancestors: number[] = [];
+    const walk = (nodes: SceneNode[], trail: number[]) => {
+      for (const n of nodes) {
+        if (scene.selection.includes(n.id)) ancestors.push(...trail);
+        walk(n.children, [...trail, n.id]);
+      }
+    };
+    walk(scene.nodes, []);
+    // The ancestor chain is part of the key: a drawn shape is selected
+    // mid-drag but only parented into its frame on pointer-up.
+    const key = `${scene.selection.join(",")}|${ancestors.join(",")}`;
+    if (key === prevSelection.current) return;
+    prevSelection.current = key;
+    if (ancestors.length === 0) return;
+    setExpanded((prev) => {
+      if (ancestors.every((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      ancestors.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [scene.selection, scene.nodes]);
 
   const toggleExpand = (id: number) =>
     setExpanded((prev) => {

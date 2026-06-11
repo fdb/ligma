@@ -424,10 +424,10 @@ test("documents persist through the worker across reload", async ({ page }) => {
   const id = await openNewDocument(page);
   await page.keyboard.press("f");
   await drag(page, 200, 150, 500, 350);
-  // Text placed inside the frame becomes its child; expand to see it.
+  // Text placed inside the frame becomes its child; selecting it
+  // auto-expands the frame, so the row appears without clicking.
   await page.keyboard.press("t");
   await clickCanvas(page, 300, 250);
-  await expandLayer(page, "Frame 1");
   await expect(layers(page).getByText("Text 1")).toBeVisible();
 
   await page.getByRole("button", { name: "Save" }).click();
@@ -546,6 +546,11 @@ test("drawing inside a frame nests the shape under it in the outliner", async ({
   expect(s.nodes.length).toBe(1);
   expect(s.nodes[0].children.map((c: any) => c.kind)).toEqual(["rect"]);
 
+  // The new child is selected, which auto-reveals it in the outliner;
+  // the chevron now collapses it and expands it again.
+  await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
+  await layers(page).getByTitle("Collapse").click();
+  await expect(layers(page).getByText("Rectangle 1")).not.toBeVisible();
   await expandLayer(page, "Frame 1");
   await expect(layers(page).getByText("Rectangle 1")).toBeVisible();
 

@@ -4,6 +4,8 @@ import { evaluateExpression } from "../lib/expression";
 
 interface Props {
   label: string;
+  /** Tooltip explaining a terse label (also names the scrub handle). */
+  title?: string;
   suffix?: string;
   /** Display-space value; the engine stores value * scale. */
   value: number;
@@ -25,6 +27,7 @@ const fmt = (v: number) => String(Math.round(v * 100) / 100);
  */
 export function NumberField({
   label,
+  title,
   suffix,
   value,
   scale = 1,
@@ -64,6 +67,7 @@ export function NumberField({
     <label className="flex h-7 items-center rounded-md bg-zinc-100 px-2 focus-within:ring-1 focus-within:ring-sky-400">
       <span
         data-scrub={field}
+        title={title}
         className="w-4 shrink-0 cursor-ew-resize text-[11px] text-zinc-400 select-none"
         // Block label activation: a click on the label would focus the
         // input even after a scrub, stealing subsequent keyboard input.

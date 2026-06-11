@@ -143,30 +143,45 @@ const BLEND_MODES = [
   "luminosity",
 ];
 
+/** Caret for appearance-none selects, so they match the input chrome. */
+const SelectCaret = () => (
+  <span className="pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 rotate-90 text-zinc-400">
+    <Icon name="chevron" size={10} />
+  </span>
+);
+
 function ExportSection({ engine, node }: { engine: Engine; node: SceneNode }) {
   return (
     <Section title="Export" onAdd={() => engine.add_export_preset(node.id)}>
       {node.exportPresets.map((p, i) => (
         <div key={i} className="mb-1.5 flex items-center gap-1.5">
-          <select
-            value={p.scale}
-            onChange={(e) => engine.set_export_preset(node.id, i, parseFloat(e.target.value), p.format)}
-            className="h-7 flex-1 rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
-          >
-            {SCALES.map((s) => (
-              <option key={s} value={s}>
-                {s}x
-              </option>
-            ))}
-          </select>
-          <select
-            value={p.format}
-            onChange={(e) => engine.set_export_preset(node.id, i, p.scale, e.target.value)}
-            className="h-7 flex-1 rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 uppercase outline-none focus:ring-1 focus:ring-sky-400"
-          >
-            <option value="png">PNG</option>
-            <option value="svg">SVG</option>
-          </select>
+          <div className="relative flex-1">
+            <select
+              value={p.scale}
+              onChange={(e) =>
+                engine.set_export_preset(node.id, i, parseFloat(e.target.value), p.format)
+              }
+              className="h-7 w-full appearance-none rounded-md bg-zinc-100 px-2 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+            >
+              {SCALES.map((s) => (
+                <option key={s} value={s}>
+                  {s}x
+                </option>
+              ))}
+            </select>
+            <SelectCaret />
+          </div>
+          <div className="relative flex-1">
+            <select
+              value={p.format}
+              onChange={(e) => engine.set_export_preset(node.id, i, p.scale, e.target.value)}
+              className="h-7 w-full appearance-none rounded-md bg-zinc-100 px-2 text-[11.5px] text-zinc-800 uppercase outline-none focus:ring-1 focus:ring-sky-400"
+            >
+              <option value="png">PNG</option>
+              <option value="svg">SVG</option>
+            </select>
+            <SelectCaret />
+          </div>
           <button
             title="Remove preset"
             onClick={() => engine.remove_export_preset(node.id, i)}
@@ -265,12 +280,12 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
     <aside className="w-60 shrink-0 overflow-y-auto border-l border-zinc-200 bg-white">
       <Section title={n.name}>
         <div className="grid grid-cols-2 gap-2">
-          <NumberField label="X" value={n.x} field="x" {...common} />
-          <NumberField label="Y" value={n.y} field="y" {...common} />
+          <NumberField label="X" title="X position" value={n.x} field="x" {...common} />
+          <NumberField label="Y" title="Y position" value={n.y} field="y" {...common} />
           {!isGroup && (
             <>
-              <NumberField label="W" value={n.w} field="w" min={1} {...common} />
-              <NumberField label="H" value={n.h} field="h" min={1} {...common} />
+              <NumberField label="W" title="Width" value={n.w} field="w" min={1} {...common} />
+              <NumberField label="H" title="Height" value={n.h} field="h" min={1} {...common} />
             </>
           )}
         </div>
@@ -280,6 +295,7 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
         <div className="grid grid-cols-2 gap-2">
           <NumberField
             label="O"
+            title="Opacity"
             suffix="%"
             value={n.opacity * 100}
             scale={0.01}
@@ -291,6 +307,7 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
           {(n.kind === "rect" || n.kind === "frame") && (
             <NumberField
               label="R"
+              title="Corner radius"
               value={n.cornerRadius}
               min={0}
               field="cornerRadius"
@@ -298,18 +315,22 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
             />
           )}
         </div>
-        <select
-          data-testid="blend-mode"
-          value={n.blendMode}
-          onChange={(e) => engine.set_blend_mode(n.id, e.target.value)}
-          className="mt-2 h-7 w-full rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
-        >
-          {BLEND_MODES.map((m) => (
-            <option key={m} value={m}>
-              {m.charAt(0).toUpperCase() + m.slice(1).replace("-", " ")}
-            </option>
-          ))}
-        </select>
+        <div className="relative mt-2">
+          <select
+            data-testid="blend-mode"
+            title="Blend mode"
+            value={n.blendMode}
+            onChange={(e) => engine.set_blend_mode(n.id, e.target.value)}
+            className="h-7 w-full appearance-none rounded-md bg-zinc-100 px-2 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+          >
+            {BLEND_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m.charAt(0).toUpperCase() + m.slice(1).replace("-", " ")}
+              </option>
+            ))}
+          </select>
+          <SelectCaret />
+        </div>
       </Section>
 
       {!isGroup && (
@@ -355,24 +376,35 @@ export function PropertiesPanel({ engine, scene }: { engine: Engine; scene: Scen
             rows={2}
             className="mb-2 w-full resize-none rounded-md bg-zinc-100 px-2 py-1.5 text-[12px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
           />
-          <select
-            data-testid="font-family"
-            value={n.fontFamily}
-            onChange={(e) => {
-              ensureFont(e.target.value);
-              engine.set_font_family(n.id, e.target.value);
-            }}
-            className="mb-2 h-7 w-full rounded-md bg-zinc-100 px-1.5 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
-            style={{ fontFamily: `'${n.fontFamily}', sans-serif` }}
-          >
-            {[...new Set([n.fontFamily, ...FONT_FAMILIES])].sort().map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+          <div className="relative mb-2">
+            <select
+              data-testid="font-family"
+              title="Font family"
+              value={n.fontFamily}
+              onChange={(e) => {
+                ensureFont(e.target.value);
+                engine.set_font_family(n.id, e.target.value);
+              }}
+              className="h-7 w-full appearance-none rounded-md bg-zinc-100 px-2 text-[11.5px] text-zinc-800 outline-none focus:ring-1 focus:ring-sky-400"
+              style={{ fontFamily: `'${n.fontFamily}', sans-serif` }}
+            >
+              {[...new Set([n.fontFamily, ...FONT_FAMILIES])].sort().map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+            <SelectCaret />
+          </div>
           <div className="grid grid-cols-2 gap-2">
-            <NumberField label="S" value={n.fontSize} min={1} field="fontSize" {...common} />
+            <NumberField
+              label="S"
+              title="Font size"
+              value={n.fontSize}
+              min={1}
+              field="fontSize"
+              {...common}
+            />
           </div>
           <div className="mt-2 flex items-center justify-between">
             <div className="flex items-center gap-0.5">

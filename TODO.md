@@ -6,6 +6,8 @@
 
 # DONE (things are moved here once they are done)
 
+- Design polish round: selecting a nested layer auto-expands its ancestors in the outliner (Figma-style reveal); selects (blend, font, export) restyled to match the input chrome with a custom caret; tooltips on the terse X/Y/W/H/O/R/S field labels
+
 - Path editing: dragged anchors snap to the stationary anchors' x/y axes, and control handles snap to anchor axes (easy vertical/horizontal tangents), with the same red guide lines as object snapping
 
 - Bezier path tool, part 2 — node editing: double-click a path to edit; drag anchors (with marquee multi-select and shift-toggle), drag control handles (smooth points keep the mirror handle collinear at its own length, alt breaks the pair), double-click an anchor to toggle corner ↔ smooth, Delete removes selected anchors (the path dissolves under two), Escape exits
