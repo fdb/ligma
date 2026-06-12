@@ -2556,13 +2556,48 @@ impl Engine {
     /// the sibling `before` in that parent's child list (0 = append, i.e.
     /// topmost). Children keep absolute coordinates, so nothing shifts.
     pub fn reparent(&mut self, id: u32, parent: u32, before: u32) {
-        if id == parent || find_node(&self.nodes, id).is_none() {
+        self.reparent_many(&[id], parent, before);
+    }
+
+    /// Reparents several nodes in one undo step, preserving their order
+    /// (the outliner drags whole selections). Invalid moves are skipped.
+    pub fn reparent_many(&mut self, ids: &[u32], parent: u32, before: u32) {
+        let valid: Vec<u32> =
+            ids.iter().copied().filter(|&id| self.can_reparent(id, parent)).collect();
+        if valid.is_empty() {
             return;
+        }
+        self.snapshot_now();
+        for &id in &valid {
+            let path = path_to(&self.nodes, id).unwrap();
+            let i = *path.last().unwrap();
+            let node = list_at(&mut self.nodes, &path).remove(i);
+            let list = if parent == 0 {
+                &mut self.nodes
+            } else {
+                &mut find_node_mut(&mut self.nodes, parent).unwrap().children
+            };
+            let at = if before == 0 {
+                list.len()
+            } else {
+                list.iter().position(|n| n.id == before).unwrap_or(list.len())
+            };
+            list.insert(at, node);
+        }
+        dissolve_empty_groups(&mut self.nodes);
+        recompute_group_bounds(&mut self.nodes);
+        self.retain_valid_selection();
+        self.touch();
+    }
+
+    fn can_reparent(&self, id: u32, parent: u32) -> bool {
+        if id == parent || find_node(&self.nodes, id).is_none() {
+            return false;
         }
         // The target may not be inside the moved subtree.
         if let Some(n) = find_node(&self.nodes, id) {
-            if parent != 0 && (parent == id || find_node(&n.children, parent).is_some()) {
-                return;
+            if parent != 0 && find_node(&n.children, parent).is_some() {
+                return false;
             }
         }
         if parent != 0 {
@@ -2572,28 +2607,10 @@ impl Engine {
                         p.kind,
                         NodeKind::Frame | NodeKind::Group | NodeKind::Component | NodeKind::Bool
                     ) => {}
-                _ => return,
+                _ => return false,
             }
         }
-        self.snapshot_now();
-        let path = path_to(&self.nodes, id).unwrap();
-        let i = *path.last().unwrap();
-        let node = list_at(&mut self.nodes, &path).remove(i);
-        let list = if parent == 0 {
-            &mut self.nodes
-        } else {
-            &mut find_node_mut(&mut self.nodes, parent).unwrap().children
-        };
-        let at = if before == 0 {
-            list.len()
-        } else {
-            list.iter().position(|n| n.id == before).unwrap_or(list.len())
-        };
-        list.insert(at, node);
-        dissolve_empty_groups(&mut self.nodes);
-        recompute_group_bounds(&mut self.nodes);
-        self.retain_valid_selection();
-        self.touch();
+        true
     }
 
     /// After a move-drag, drops the dragged nodes into the topmost root

@@ -1021,6 +1021,56 @@ test("outliner: dragging rows reorders and reparents layers", async ({ page }) =
   expect(s2.nodes[1].children.length).toBe(0);
 });
 
+test("outliner: dragging one row of a multi-selection moves the whole stack", async ({
+  page,
+}) => {
+  await openNewDocument(page);
+  await page.keyboard.press("f");
+  await drag(page, 200, 150, 500, 350);
+  await page.keyboard.press("r");
+  await drag(page, 600, 150, 700, 250); // outside the frame
+  await page.keyboard.press("r");
+  await drag(page, 600, 300, 700, 400); // outside the frame
+  await expect(layers(page).getByText("Rectangle 2")).toBeVisible();
+
+  // Select both rects in the outliner; shift-click must not collapse.
+  await layers(page).getByText("Rectangle 1").click();
+  await layers(page).getByText("Rectangle 2").click({ modifiers: ["Shift"] });
+  expect((await sceneOf(page)).selection.length).toBe(2);
+
+  // Drag one of the selected rows into the frame: both rows move.
+  const srcRow = layers(page).locator("[data-layer]", { hasText: "Rectangle 2" });
+  const dstRow = layers(page).locator("[data-layer]", { hasText: "Frame 1" });
+  const dst = (await dstRow.boundingBox())!;
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await srcRow.dispatchEvent("dragstart", { dataTransfer });
+  await dstRow.dispatchEvent("dragover", {
+    dataTransfer,
+    clientX: dst.x + dst.width / 2,
+    clientY: dst.y + dst.height / 2, // middle = "into"
+  });
+  await dstRow.dispatchEvent("drop", { dataTransfer });
+
+  const s = await sceneOf(page);
+  expect(s.nodes.length).toBe(1);
+  expect(s.nodes[0].children.map((c: any) => c.name)).toEqual([
+    "Rectangle 1",
+    "Rectangle 2",
+  ]);
+
+  // The whole stack returns to the root in a single undo step.
+  await page.keyboard.press("Meta+z");
+  const s2 = await sceneOf(page);
+  expect(s2.nodes.length).toBe(3);
+  expect(s2.nodes[0].children.length).toBe(0);
+
+  // A plain click on one row of the still-multi-selection narrows to it.
+  expect((await sceneOf(page)).selection.length).toBe(2);
+  await layers(page).getByText("Rectangle 1").click();
+  const s3 = await sceneOf(page);
+  expect(s3.selection.length).toBe(1);
+});
+
 test("text: choosing a Google Font loads it and re-renders", async ({ page }) => {
   await openNewDocument(page);
   await page.keyboard.press("t");

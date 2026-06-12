@@ -1574,6 +1574,41 @@ erel.pointer_up();
   );
 }
 
+// reparent_many: moves a whole selection in one undo step, preserving
+// relative order (outliner multi-drag).
+const emany = new Engine();
+emany.set_tool("frame");
+emany.pointer_down(100, 100, false, false);
+emany.pointer_move(400, 400, false);
+emany.pointer_up();
+for (const x of [500, 600, 700]) {
+  emany.set_tool("rect");
+  emany.pointer_down(x, 500, false, false);
+  emany.pointer_move(x + 50, 550, false);
+  emany.pointer_up();
+}
+{
+  const s = JSON.parse(emany.scene());
+  const fid = s.nodes[0].id;
+  const [r1, r2, r3] = s.nodes.slice(1).map((n) => n.id);
+  emany.reparent_many(Uint32Array.from([r1, r3]), fid, 0);
+  const s2 = JSON.parse(emany.scene());
+  assert(
+    s2.nodes.length === 2 &&
+      s2.nodes[0].children.map((n) => n.id).join() === [r1, r3].join(),
+    "reparent_many moves several nodes preserving order",
+  );
+  assert(s2.nodes[1].id === r2, "reparent_many leaves unrelated nodes in place");
+  emany.undo();
+  const s3 = JSON.parse(emany.scene());
+  assert(
+    s3.nodes.length === 4 && s3.nodes[0].children.length === 0,
+    "reparent_many undoes in one step",
+  );
+  emany.reparent_many(Uint32Array.from([fid]), r2, 0); // rect is not a container
+  assert(JSON.parse(emany.scene()).nodes.length === 4, "reparent_many skips invalid moves");
+}
+
 // Drag-drop reparenting: dropping a node on a frame nests it; dragging
 // it back out returns it to the root. One undo step per drag.
 const edrop = new Engine();

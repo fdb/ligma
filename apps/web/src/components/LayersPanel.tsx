@@ -8,6 +8,21 @@ const kindIcon = (kind: SceneNode["kind"]) =>
 
 type Zone = "above" | "below" | "into";
 
+/** The ids in `keep`, in storage order (bottom of z to top), skipping
+ *  nodes whose ancestor is also kept — those travel with it. */
+function dragSet(nodes: SceneNode[], keep: Set<number>): number[] {
+  const out: number[] = [];
+  const walk = (list: SceneNode[], inKept: boolean) => {
+    for (const n of list) {
+      const kept = !inKept && keep.has(n.id);
+      if (kept) out.push(n.id);
+      walk(n.children, inKept || kept);
+    }
+  };
+  walk(nodes, false);
+  return out;
+}
+
 /** The parent id (0 = root) and sibling list containing a node. */
 function locate(
   nodes: SceneNode[],
@@ -105,7 +120,17 @@ function LayerRow({
           onDropRow(node.id);
         }}
         onDragEnd={onDragEndRow}
-        onPointerDown={(e) => engine.select(node.id, e.shiftKey)}
+        onPointerDown={(e) => {
+          // Pressing an already-selected row keeps the stack so a drag
+          // moves all of it; a click without a drag narrows below.
+          if (!e.shiftKey && scene.selection.includes(node.id)) return;
+          engine.select(node.id, e.shiftKey);
+        }}
+        onClick={(e) => {
+          // A completed drag suppresses the click, so this only fires
+          // for plain clicks.
+          if (!e.shiftKey) engine.select(node.id, false);
+        }}
         onDoubleClick={() => setEditing(node.id)}
         className={`group/row flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1 ${
           selected
@@ -120,7 +145,10 @@ function LayerRow({
           <button
             title={open ? "Collapse" : "Expand"}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => onToggleExpand(node.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand(node.id);
+            }}
             className={`flex size-4 shrink-0 items-center justify-center text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}
           >
             <Icon name="chevron" size={10} />
@@ -153,7 +181,10 @@ function LayerRow({
         <button
           title={node.locked ? "Unlock" : "Lock"}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => engine.set_locked(node.id, !node.locked)}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.set_locked(node.id, !node.locked);
+          }}
           className={`flex size-5 shrink-0 items-center justify-center rounded text-zinc-400 hover:text-zinc-700 ${
             node.locked ? "" : "opacity-0 group-hover/row:opacity-100"
           }`}
@@ -163,7 +194,10 @@ function LayerRow({
         <button
           title={node.visible ? "Hide" : "Show"}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => engine.set_visible(node.id, !node.visible)}
+          onClick={(e) => {
+            e.stopPropagation();
+            engine.set_visible(node.id, !node.visible);
+          }}
           className={`flex size-5 shrink-0 items-center justify-center rounded text-zinc-400 hover:text-zinc-700 ${
             node.visible ? "opacity-0 group-hover/row:opacity-100" : ""
           }`}
@@ -202,7 +236,7 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
   // The latest hint, readable synchronously: a drop can arrive before
   // React re-renders the state set by the preceding dragover.
   const hintRef = useRef<{ id: number; zone: Zone } | null>(null);
-  const dragId = useRef<number | null>(null);
+  const dragIds = useRef<number[]>([]);
 
   // Selecting a nested layer (canvas click, paste, …) reveals it in the
   // outliner by expanding its ancestor rows, Figma-style. Keyed on the
@@ -241,18 +275,18 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
     });
 
   const clearDrag = () => {
-    dragId.current = null;
+    dragIds.current = [];
     hintRef.current = null;
     setDropHint(null);
   };
 
   const handleDrop = (targetId: number) => {
-    const src = dragId.current;
+    const srcs = dragIds.current;
     const hint = hintRef.current;
     clearDrag();
-    if (!src || !hint || hint.id !== targetId || src === targetId) return;
+    if (!srcs.length || !hint || hint.id !== targetId || srcs.includes(targetId)) return;
     if (hint.zone === "into") {
-      engine.reparent(src, targetId, 0); // append = topmost inside
+      engine.reparent_many(Uint32Array.from(srcs), targetId, 0); // append = topmost inside
       setExpanded((prev) => new Set(prev).add(targetId));
       return;
     }
@@ -261,12 +295,12 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
     const idx = info.list.findIndex((n) => n.id === targetId);
     if (hint.zone === "above") {
       // Visually above the row = next position up in z-order = inserted
-      // after it in the list, i.e. before its next sibling.
-      let before = info.list[idx + 1];
-      if (before?.id === src) before = info.list[idx + 2];
-      engine.reparent(src, info.parent, before?.id ?? 0);
+      // after it in the list, i.e. before its next sibling (skipping
+      // dragged rows, which are about to move anyway).
+      const before = info.list.slice(idx + 1).find((n) => !srcs.includes(n.id));
+      engine.reparent_many(Uint32Array.from(srcs), info.parent, before?.id ?? 0);
     } else {
-      engine.reparent(src, info.parent, targetId);
+      engine.reparent_many(Uint32Array.from(srcs), info.parent, targetId);
     }
   };
 
@@ -299,7 +333,12 @@ export function LayersPanel({ engine, scene }: { engine: Engine; scene: Scene })
             editing={editing}
             setEditing={setEditing}
             dropHint={dropHint}
-            onDragStartRow={(id) => (dragId.current = id)}
+            onDragStartRow={(id) => {
+              // Dragging a row that is part of the selection drags the
+              // whole selection; an unselected row drags alone.
+              const ids = scene.selection.includes(id) ? scene.selection : [id];
+              dragIds.current = dragSet(scene.nodes, new Set(ids));
+            }}
             onDragOverRow={(id, zone) => {
               hintRef.current = { id, zone };
               setDropHint((h) => (h?.id === id && h.zone === zone ? h : { id, zone }));
