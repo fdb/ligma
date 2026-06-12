@@ -1268,16 +1268,47 @@ impl Engine {
                 }
                 // (Frame parenting happened at pointer-down, so the
                 // outliner never shows the shape at the top level.)
+                // A frame drawn around existing objects adopts everything
+                // fully enclosed by it (Figma behavior). Children keep
+                // absolute coordinates, so nothing shifts.
+                if let Some(f) = find_node(&self.nodes, id) {
+                    if f.kind == NodeKind::Frame {
+                        let (fx, fy, fw, fh) = (f.x, f.y, f.w, f.h);
+                        let mut adopted = Vec::new();
+                        let mut i = 0;
+                        while i < self.nodes.len() {
+                            let n = &self.nodes[i];
+                            let enclosed = n.id != id
+                                && !matches!(n.kind, NodeKind::Frame | NodeKind::Component)
+                                && n.x >= fx
+                                && n.y >= fy
+                                && n.x + n.w <= fx + fw
+                                && n.y + n.h <= fy + fh;
+                            if enclosed {
+                                adopted.push(self.nodes.remove(i));
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        if !adopted.is_empty() {
+                            if let Some(f) = find_node_mut(&mut self.nodes, id) {
+                                f.children.extend(adopted);
+                            }
+                        }
+                    }
+                }
                 self.commit_mutation();
                 self.tool = Tool::Select;
             }
             Drag::Move { starts, moved, alt_copied, pressed, .. } => {
                 if moved {
+                    let ids: Vec<u32> = starts.iter().map(|s| s.0).collect();
                     for (id, _, _) in starts {
                         if let Some(n) = find_node_mut(&mut self.nodes, id) {
                             round_subtree(n);
                         }
                     }
+                    self.reparent_dropped(&ids);
                     recompute_group_bounds(&mut self.nodes);
                     self.commit_mutation();
                 } else if alt_copied {
@@ -2563,6 +2594,50 @@ impl Engine {
         recompute_group_bounds(&mut self.nodes);
         self.retain_valid_selection();
         self.touch();
+    }
+
+    /// After a move-drag, drops the dragged nodes into the topmost root
+    /// frame under the selection's center, or back to the root when they
+    /// land on open canvas. Runs inside the move's mutation, so the move
+    /// and the reparent undo as one step. Children keep absolute
+    /// coordinates, so nothing shifts.
+    fn reparent_dropped(&mut self, ids: &[u32]) {
+        let Some((bx, by, bx2, by2)) = self.selection_bbox(ids) else { return };
+        let (cx, cy) = ((bx + bx2) / 2.0, (by + by2) / 2.0);
+        let target = self
+            .nodes
+            .iter()
+            .rev()
+            .find(|f| {
+                matches!(f.kind, NodeKind::Frame | NodeKind::Component)
+                    && !ids.contains(&f.id)
+                    && f.visible
+                    && !f.locked
+                    && f.contains(cx, cy)
+            })
+            .map_or(0, |f| f.id);
+        for &id in ids {
+            let Some(n) = find_node(&self.nodes, id) else { continue };
+            // Frames don't nest (Figma 1.0 scope); group/bool members
+            // travel with their container instead of escaping it.
+            if matches!(n.kind, NodeKind::Frame | NodeKind::Component) {
+                continue;
+            }
+            match parent_of(&self.nodes, id) {
+                Some(p) if matches!(p.kind, NodeKind::Group | NodeKind::Bool) => continue,
+                Some(p) if p.id == target => continue,
+                None if target == 0 => continue,
+                _ => {}
+            }
+            let path = path_to(&self.nodes, id).unwrap();
+            let i = *path.last().unwrap();
+            let node = list_at(&mut self.nodes, &path).remove(i);
+            if target == 0 {
+                self.nodes.push(node);
+            } else if let Some(f) = find_node_mut(&mut self.nodes, target) {
+                f.children.push(node);
+            }
+        }
     }
 
     // ----- clipboard & z-order -----

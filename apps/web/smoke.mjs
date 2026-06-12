@@ -1574,6 +1574,90 @@ erel.pointer_up();
   );
 }
 
+// Drag-drop reparenting: dropping a node on a frame nests it; dragging
+// it back out returns it to the root. One undo step per drag.
+const edrop = new Engine();
+edrop.set_tool("frame");
+edrop.pointer_down(100, 100, false, false);
+edrop.pointer_move(400, 400, false);
+edrop.pointer_up();
+edrop.set_tool("rect");
+edrop.pointer_down(600, 400, false, false);
+edrop.pointer_move(700, 500, false);
+edrop.pointer_up();
+assert(JSON.parse(edrop.scene()).nodes.length === 2, "rect drawn outside the frame stays at root");
+edrop.pointer_down(650, 450, false, false); // drag the rect onto the frame
+edrop.pointer_move(250, 250, false);
+edrop.pointer_up();
+{
+  const s = JSON.parse(edrop.scene());
+  assert(
+    s.nodes.length === 1 && s.nodes[0].children.length === 1 && s.nodes[0].children[0].x === 200,
+    "dropping a node on a frame nests it inside",
+  );
+}
+edrop.pointer_down(250, 250, false, false); // drag it back out
+edrop.pointer_move(650, 650, false);
+edrop.pointer_up();
+{
+  const s = JSON.parse(edrop.scene());
+  assert(
+    s.nodes.length === 2 && s.nodes[0].children.length === 0 && s.nodes[1].x === 600,
+    "dragging a child out of a frame returns it to the root",
+  );
+}
+edrop.undo();
+{
+  const s = JSON.parse(edrop.scene());
+  assert(
+    s.nodes.length === 1 && s.nodes[0].children[0]?.x === 200,
+    "drag-out undoes as one step (move + reparent)",
+  );
+}
+
+// Drawing a frame around existing objects adopts the fully enclosed ones.
+const eadopt = new Engine();
+eadopt.set_tool("rect");
+eadopt.pointer_down(500, 100, false, false);
+eadopt.pointer_move(550, 150, false);
+eadopt.pointer_up();
+eadopt.set_tool("rect");
+eadopt.pointer_down(600, 100, false, false);
+eadopt.pointer_move(650, 150, false);
+eadopt.pointer_up();
+eadopt.set_tool("rect");
+eadopt.pointer_down(700, 100, false, false); // will straddle the frame edge
+eadopt.pointer_move(750, 150, false);
+eadopt.pointer_up();
+eadopt.set_tool("frame");
+eadopt.pointer_down(480, 80, false, false);
+eadopt.pointer_move(680, 200, false);
+eadopt.pointer_up();
+{
+  const s = JSON.parse(eadopt.scene());
+  const frame = s.nodes.find((n) => n.kind === "frame");
+  assert(
+    s.nodes.length === 2 && frame.children.length === 2,
+    "a frame drawn around objects adopts the fully enclosed ones",
+  );
+  assert(
+    frame.children[0].x === 500 && frame.children[1].x === 600,
+    "adopted children keep their absolute positions and order",
+  );
+  assert(
+    s.nodes[0].x === 700 && s.nodes[0].kind === "rect",
+    "a partially overlapping object is not adopted",
+  );
+}
+eadopt.undo();
+{
+  const s = JSON.parse(eadopt.scene());
+  assert(
+    s.nodes.length === 3 && s.nodes.every((n) => n.kind === "rect"),
+    "frame-around adoption undoes in one step",
+  );
+}
+
 // Camera.
 e.wheel(0, -100, true, 400, 300);
 assert(scene().zoom > 1, "ctrl+wheel zooms in");
