@@ -52,6 +52,12 @@ export function CanvasView({
   onResolveComment,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Lives on the component, not inside the keyboard effect: the effect
+  // re-runs when callback props change identity, and space-pan must
+  // survive re-renders between keydown and keyup.
+  const prevTool = useRef<Tool | null>(null);
+  // Last pointer position while panning with the middle mouse button.
+  const mmbPan = useRef<{ x: number; y: number } | null>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const sceneRef = useRef(scene);
@@ -105,7 +111,6 @@ export function CanvasView({
 
   // Keyboard: tools, delete, undo/redo, duplicate, nudge, space-pan, save.
   useEffect(() => {
-    const prevTool = { current: null as Tool | null };
     const isTyping = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable;
@@ -194,7 +199,9 @@ export function CanvasView({
         engine.nudge(dx, dy);
       } else if (e.key === " " && !e.repeat) {
         e.preventDefault();
-        prevTool.current = sceneRef.current.tool;
+        // Read the engine, not the React snapshot: a tool change in the
+        // same frame (e.g. "r" then space) hasn't reached sceneRef yet.
+        prevTool.current = (JSON.parse(engine.scene()) as Scene).tool;
         engine.set_tool("hand");
       } else if (!mod && toolKeys[e.key.toLowerCase()]) {
         engine.set_tool(toolKeys[e.key.toLowerCase()]);
@@ -404,19 +411,38 @@ export function CanvasView({
         ref={canvasRef}
         className="absolute inset-0 size-full touch-none"
         onPointerDown={(e) => {
+          if (e.button === 1) {
+            // Middle mouse button pans, regardless of the active tool.
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            mmbPan.current = { x: e.clientX, y: e.clientY };
+            return;
+          }
           if (e.button !== 0) return;
           e.currentTarget.setPointerCapture(e.pointerId);
           const { x, y } = pos(e);
           engine.pointer_down(x, y, e.shiftKey, e.altKey);
         }}
         onPointerMove={(e) => {
+          if (mmbPan.current) {
+            engine.wheel(mmbPan.current.x - e.clientX, mmbPan.current.y - e.clientY, false, 0, 0);
+            mmbPan.current = { x: e.clientX, y: e.clientY };
+            e.currentTarget.style.cursor = "grabbing";
+            return;
+          }
           const { x, y } = pos(e);
           engine.pointer_move(x, y, e.shiftKey);
           e.currentTarget.style.cursor = engine.cursor(x, y);
           const s = sceneRef.current;
           reportCursor((x - s.panX) / s.zoom, (y - s.panY) / s.zoom);
         }}
-        onPointerUp={() => engine.pointer_up()}
+        onPointerUp={(e) => {
+          if (e.button === 1 || mmbPan.current) {
+            mmbPan.current = null;
+            return;
+          }
+          engine.pointer_up();
+        }}
         onDoubleClick={onDoubleClick}
         onContextMenu={onContextMenu}
       />

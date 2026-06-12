@@ -472,6 +472,37 @@ test("marquee select, zoom, and pan survive a workout", async ({ page }) => {
   await expect(page.locator("canvas")).toBeVisible();
 });
 
+test("space pans temporarily and restores the tool; MMB pans with any tool", async ({ page }) => {
+  await openNewDocument(page);
+
+  // Hold space: the hand tool takes over, dragging pans 1:1.
+  await page.keyboard.press("r");
+  expect((await sceneOf(page)).tool).toBe("rect");
+  await page.keyboard.down(" ");
+  expect((await sceneOf(page)).tool).toBe("hand");
+  const s1 = await sceneOf(page);
+  await drag(page, 300, 250, 400, 300);
+  const s2 = await sceneOf(page);
+  expect(s2.panX - s1.panX).toBeCloseTo(100, 0);
+  expect(s2.panY - s1.panY).toBeCloseTo(50, 0);
+
+  // Release space: back to the rect tool, not stuck on hand.
+  await page.keyboard.up(" ");
+  expect((await sceneOf(page)).tool).toBe("rect");
+
+  // Middle mouse button pans even while the rect tool is active —
+  // and draws nothing.
+  const box = await canvasBox(page);
+  await page.mouse.move(box.x + 300, box.y + 250);
+  await page.mouse.down({ button: "middle" });
+  await page.mouse.move(box.x + 380, box.y + 290, { steps: 8 });
+  await page.mouse.up({ button: "middle" });
+  const s3 = await sceneOf(page);
+  expect(s3.panX - s2.panX).toBeCloseTo(80, 0);
+  expect(s3.panY - s2.panY).toBeCloseTo(40, 0);
+  expect(s3.nodes).toHaveLength(0);
+});
+
 test("⌘+ and ⌘− zoom the canvas", async ({ page }) => {
   await openNewDocument(page);
   const zoom = async () => (await sceneOf(page)).zoom as number;

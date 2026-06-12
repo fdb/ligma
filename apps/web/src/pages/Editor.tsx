@@ -69,6 +69,7 @@ export function Editor() {
     refetch,
   );
   const toggleCommentMode = useCallback(() => setCommentMode((m) => !m), []);
+  const exitCommentMode = useCallback(() => setCommentMode(false), []);
 
   const onSave = useCallback(async () => {
     if (!engine) return;
@@ -189,7 +190,7 @@ export function Editor() {
           comments={comments}
           commentMode={commentMode}
           onToggleCommentMode={toggleCommentMode}
-          onExitCommentMode={() => setCommentMode(false)}
+          onExitCommentMode={exitCommentMode}
           onAddComment={addComment}
           onResolveComment={resolveComment}
         />
