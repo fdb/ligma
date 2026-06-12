@@ -1104,6 +1104,11 @@ impl Engine {
                     (*bx, *by, *bw, *bh, *handle, *ox, *oy);
                 let starts = starts.clone();
                 let ids: Vec<u32> = starts.iter().map(|s| s.id).collect();
+                // Images resize proportionally by default (Figma: the bitmap
+                // is a fill, so free resize only crops); shift breaks the
+                // lock. Everything else inverts: free by default, shift locks.
+                let images = starts.iter().all(|s| s.kind == NodeKind::Image);
+                let constrain = if images { !shift } else { shift };
                 let (dx, dy) = (x - ox, y - oy);
                 let (hx, hy) = HANDLES[handle];
                 // A drag moves the edge(s) the handle sits on; the opposite
@@ -1124,9 +1129,10 @@ impl Engine {
                     (by, bh)
                 };
                 // The dragged edge snaps to nearby edges/centers — most
-                // usefully the parent frame's — unless shift constrains.
+                // usefully the parent frame's — unless proportions are
+                // constrained (snapping one edge would break the ratio).
                 self.guides.clear();
-                if !shift {
+                if !constrain {
                     if hx != 0.5 {
                         let edge = if hx == 0.0 { nx } else { nx + nw };
                         if let Some((pos, from, to)) = self.snap_edge(edge, true, &ids) {
@@ -1170,9 +1176,9 @@ impl Engine {
                     ny += nh;
                     nh = -nh;
                 }
-                // Shift keeps the original proportions, following whichever
-                // axis changed more (corner handles only).
-                if shift && hx != 0.5 && hy != 0.5 && bw > 0.0 && bh > 0.0 {
+                // Constrained resize keeps the original proportions,
+                // following whichever axis changed more (corner handles only).
+                if constrain && hx != 0.5 && hy != 0.5 && bw > 0.0 && bh > 0.0 {
                     let (fx, fy) = (nw / bw, nh / bh);
                     let f = if (fx - 1.0).abs() >= (fy - 1.0).abs() { fx } else { fy };
                     nw = bw * f;

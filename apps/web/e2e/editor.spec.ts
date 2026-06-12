@@ -793,6 +793,107 @@ test("images: place via File menu, drag-drop, render and persist", async ({ page
   await expect.poll(() => pixelAt(cx2, cy2), { timeout: 10_000 }).toEqual([255, 0, 0]);
 });
 
+test("images: bitmap fills the node (cover, never stretched)", async ({ page }) => {
+  await openNewDocument(page);
+
+  // 100×100 PNG, left 30 columns red, rest blue.
+  const b64 = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 100;
+    c.height = 100;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#0000ff";
+    ctx.fillRect(0, 0, 100, 100);
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(0, 0, 30, 100);
+    return c.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByRole("button", { name: "File" }).click();
+  await page.getByRole("button", { name: "Place image…" }).click();
+  await page
+    .getByTestId("image-input")
+    .setInputFiles({ name: "stripe.png", mimeType: "image/png", buffer: Buffer.from(b64, "base64") });
+  await expect(layers(page).getByText("Image 1")).toBeVisible();
+
+  const pixelAt = (x: number, y: number) =>
+    page.evaluate(([px, py]) => {
+      const canvas = document.querySelector("canvas")!;
+      const r = canvas.getBoundingClientRect();
+      const dpr = canvas.width / r.width;
+      const d = canvas.getContext("2d")!.getImageData(px * dpr, py * dpr, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    }, [x, y]);
+
+  // At natural size (100×100) the full bitmap shows: stripe on the left.
+  const s = await sceneOf(page);
+  const n = s.nodes[0];
+  const at = (wx: number, wy: number): [number, number] => [
+    wx * s.zoom + s.panX,
+    wy * s.zoom + s.panY,
+  ];
+  await expect.poll(() => pixelAt(...at(n.x + 10, n.y + 50))).toEqual([255, 0, 0]);
+
+  // Narrow the node to 20px. Cover crops a centered 20×100 source window
+  // (columns 40–60, all blue); the old stretch behavior would squeeze the
+  // red stripe into the node's left 6px instead.
+  await page.evaluate((id) => (window as any).__engine.set_field(id, "w", 20), n.id);
+  await expect.poll(() => pixelAt(...at(n.x + 3, n.y + 50))).toEqual([0, 0, 255]);
+  await expect.poll(() => pixelAt(...at(n.x + 10, n.y + 50))).toEqual([0, 0, 255]);
+
+  // The SVG export uses the same fill semantics.
+  const svg = await page.evaluate((id) => (window as any).__engine.export_svg(id) as string, n.id);
+  expect(svg).toContain('preserveAspectRatio="xMidYMid slice"');
+});
+
+test("images: corner drag keeps aspect ratio by default, shift unlocks", async ({ page }) => {
+  await openNewDocument(page);
+  const box = await canvasBox(page);
+
+  // A 100×100 blue PNG; placement selects the node, so handles are live.
+  const b64 = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 100;
+    c.height = 100;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#0000ff";
+    ctx.fillRect(0, 0, 100, 100);
+    return c.toDataURL("image/png").split(",")[1];
+  });
+  await page.getByRole("button", { name: "File" }).click();
+  await page.getByRole("button", { name: "Place image…" }).click();
+  await page
+    .getByTestId("image-input")
+    .setInputFiles({ name: "sq.png", mimeType: "image/png", buffer: Buffer.from(b64, "base64") });
+  await expect(layers(page).getByText("Image 1")).toBeVisible();
+
+  const sizeOf = async () => {
+    const n = (await sceneOf(page)).nodes[0];
+    return [n.w, n.h];
+  };
+  const handleAt = async () => {
+    const s = await sceneOf(page);
+    const n = s.nodes[0];
+    return [(n.x + n.w) * s.zoom + s.panX, (n.y + n.h) * s.zoom + s.panY];
+  };
+
+  // Dragging the bottom-right handle +100/+50 follows the larger axis:
+  // the 100×100 image becomes 200×200, not 200×150.
+  let [hx, hy] = await handleAt();
+  await drag(page, hx, hy, hx + 100, hy + 50);
+  await expect.poll(sizeOf).toEqual([200, 200]);
+
+  // Shift breaks the lock: the same drag now resizes freely (the cover
+  // fill crops instead of stretching).
+  [hx, hy] = await handleAt();
+  await page.mouse.move(box.x + hx, box.y + hy);
+  await page.mouse.down();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(box.x + hx + 100, box.y + hy + 50, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(sizeOf).toEqual([300, 250]);
+});
+
 test("text wraps to its box and honors alignment", async ({ page }) => {
   await openNewDocument(page);
   await page.keyboard.press("t");

@@ -295,7 +295,7 @@ pub(crate) fn svg_node(
         }
         NodeKind::Image => {
             out.push_str(&format!(
-                r#"<image x="{x}" y="{y}" width="{}" height="{}" href="/api/assets/{}" preserveAspectRatio="none"/>"#,
+                r#"<image x="{x}" y="{y}" width="{}" height="{}" href="/api/assets/{}" preserveAspectRatio="xMidYMid slice"/>"#,
                 n.w, n.h, xml_escape(&n.image)
             ));
             for p in &n.strokes {

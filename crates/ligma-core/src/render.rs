@@ -229,9 +229,18 @@ pub(crate) fn draw_node(
                 .and_then(|v| v.dyn_into::<web_sys::HtmlImageElement>().ok());
             match el {
                 Some(img) => {
-                    let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
-                        &img, n.x, n.y, n.w, n.h,
-                    );
+                    // Figma-style "fill": the bitmap covers the node at its
+                    // own aspect ratio, center-cropped, never stretched.
+                    let (iw, ih) = (img.natural_width() as f64, img.natural_height() as f64);
+                    if iw > 0.0 && ih > 0.0 && n.w > 0.0 && n.h > 0.0 {
+                        let scale = (n.w / iw).max(n.h / ih);
+                        let (sw, sh) = (n.w / scale, n.h / scale);
+                        let (sx, sy) = ((iw - sw) / 2.0, (ih - sh) / 2.0);
+                        let _ = ctx
+                            .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                &img, sx, sy, sw, sh, n.x, n.y, n.w, n.h,
+                            );
+                    }
                 }
                 None => {
                     ctx.set_fill_style_str("#f4f4f5");
