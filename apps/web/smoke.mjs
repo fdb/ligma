@@ -1303,8 +1303,8 @@ assert(
   "components round-trip through JSON",
 );
 
-// Panel resize (set_field w/h) scales frame and group contents about the
-// top-left, matching what handle drags do.
+// Panel resize (set_field w/h) scales group contents about the top-left,
+// but frame children stay put (Figma constraints).
 const er = new Engine();
 er.set_tool("frame");
 er.pointer_down(100, 100, false, false);
@@ -1321,9 +1321,10 @@ er.set_field(erFrame.id, "h", 100); // 0.5x
 {
   const f = JSON.parse(er.scene()).nodes.find((n) => n.kind === "frame");
   const c = f.children[0];
+  assert(f.w === 400 && f.h === 100, "frame panel resize sets the frame's own size");
   assert(
-    c.x === 200 && c.w === 100 && c.y === 125 && c.h === 25,
-    "frame panel resize scales its children",
+    c.x === 150 && c.w === 50 && c.y === 150 && c.h === 50,
+    "frame panel resize leaves children in place",
   );
 }
 er.set_tool("rect");
@@ -1355,6 +1356,43 @@ assert(
   JSON.parse(er.scene()).nodes.find((n) => n.kind === "group").w === 100,
   "panel resize of a group is one undo step",
 );
+
+// Handle-drag frame resize: children don't scale; they keep their offset
+// from the frame's top-left, so only a moving top-left corner shifts them.
+const efr = new Engine();
+efr.set_tool("frame");
+efr.pointer_down(100, 100, false, false);
+efr.pointer_move(400, 400, false);
+efr.pointer_up();
+efr.set_tool("rect");
+efr.pointer_down(150, 150, false, false);
+efr.pointer_move(250, 250, false);
+efr.pointer_up();
+efr.select(JSON.parse(efr.scene()).nodes[0].id, false);
+efr.pointer_down(400, 400, false, false); // SE corner: top-left anchored
+efr.pointer_move(500, 500, false);
+efr.pointer_up();
+{
+  const f = JSON.parse(efr.scene()).nodes[0];
+  const c = f.children[0];
+  assert(f.w === 400 && f.h === 400, "corner drag resizes the frame");
+  assert(
+    c.x === 150 && c.y === 150 && c.w === 100 && c.h === 100,
+    "growing a frame from the SE leaves children untouched",
+  );
+}
+efr.pointer_down(100, 100, false, false); // NW corner: top-left moves
+efr.pointer_move(50, 50, false);
+efr.pointer_up();
+{
+  const f = JSON.parse(efr.scene()).nodes[0];
+  const c = f.children[0];
+  assert(f.x === 50 && f.w === 450, "NW drag moves the frame's origin");
+  assert(
+    c.x === 100 && c.y === 100 && c.w === 100,
+    "children follow the frame's top-left corner without scaling",
+  );
+}
 
 // Shift constraints, edge resize bands, and resize snapping.
 const ehz = new Engine();

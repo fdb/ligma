@@ -1196,7 +1196,7 @@ impl Engine {
                     .iter()
                     .map(|s| {
                         let mut c = s.clone();
-                        scale_subtree(&mut c, bx, by, nx, ny, fx, fy);
+                        resize_subtree(&mut c, bx, by, nx, ny, fx, fy);
                         c
                     })
                     .collect();
@@ -1477,13 +1477,13 @@ impl Engine {
                     let dy = py + value - n.y;
                     shift_subtree(n, 0.0, dy);
                 }
-                // Resizing scales the whole subtree about the box's
-                // top-left, so frame/group children and bezier anchors
-                // follow proportionally (matching handle drags).
+                // Resizing scales group children and bezier anchors about
+                // the box's top-left (matching handle drags); frame
+                // children stay put per their constraints.
                 "w" => {
                     let f = value.max(1.0) / n.w.max(1.0);
                     let (bx, by) = (n.x, n.y);
-                    scale_subtree(n, bx, by, bx, by, f, 1.0);
+                    resize_subtree(n, bx, by, bx, by, f, 1.0);
                     // The ratio round-trip (w * value/w) drifts in floating
                     // point; the node's own size is the typed value, exactly.
                     n.w = value.max(1.0);
@@ -1492,7 +1492,7 @@ impl Engine {
                 "h" => {
                     let f = value.max(1.0) / n.h.max(1.0);
                     let (bx, by) = (n.x, n.y);
-                    scale_subtree(n, bx, by, bx, by, 1.0, f);
+                    resize_subtree(n, bx, by, bx, by, 1.0, f);
                     n.h = value.max(1.0);
                     sync_path_bounds(n);
                 }

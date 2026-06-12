@@ -187,6 +187,9 @@ test("number fields: expressions, scrub with capture, shift steps, undo coalesci
   // The whole scrub is one undo step.
   await page.keyboard.press("Meta+z");
   expect(await w()).toBe(25);
+  // The next scrub reads its base from the rendered field, so wait for
+  // the panel to catch up with the undo.
+  await expect(wField).toHaveValue("25");
 
   // Shift while scrubbing: 10 per pixel.
   await page.mouse.move(cx, cy);
@@ -1697,14 +1700,17 @@ test("editing text hides the canvas copy, even inside a frame", async ({ page })
   await expect.poll(async () => (await sceneOf(page)).nodes[0].children[0].text).toBe("Bye");
 });
 
-test("panel W field resizes frame and group contents proportionally", async ({ page }) => {
+test("panel W field resizes groups proportionally but leaves frame children alone", async ({
+  page,
+}) => {
   await openNewDocument(page);
   await page.keyboard.press("f");
   await drag(page, 200, 150, 400, 350); // 200x200 frame
   await page.keyboard.press("r");
   await drag(page, 250, 200, 300, 250); // 50x50 child at +50,+50
 
-  // Select the frame and double its width through the panel.
+  // Select the frame and double its width through the panel: the frame
+  // grows, the child keeps its size and offset (Figma constraints).
   await page.keyboard.press("Escape");
   await layers(page).getByText("Frame 1").click();
   const wField = page.locator("label", { hasText: "W" }).locator("input");
@@ -1715,7 +1721,7 @@ test("panel W field resizes frame and group contents proportionally", async ({ p
       const f = (await sceneOf(page)).nodes[0];
       return [f.w, f.children[0].w, f.children[0].x - f.x];
     })
-    .toEqual([400, 100, 100]);
+    .toEqual([400, 50, 50]);
 
   // Groups expose W/H too now, scaling the same way.
   await page.keyboard.press("r");

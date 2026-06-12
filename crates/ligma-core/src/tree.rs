@@ -88,8 +88,11 @@ pub(crate) fn shift_subtree(n: &mut Node, dx: f64, dy: f64) {
 }
 
 /// Maps a subtree from the old selection bbox (bx,by × fx,fy scale) into a
-/// new one anchored at (nx,ny).
-pub(crate) fn scale_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx: f64, fy: f64) {
+/// new one anchored at (nx,ny). Frame children don't scale (Figma
+/// constraints): they keep their offset from the frame's top-left, only
+/// shifting when that corner moves.
+pub(crate) fn resize_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx: f64, fy: f64) {
+    let (ox, oy) = (n.x, n.y);
     n.x = nx + (n.x - bx) * fx;
     n.y = ny + (n.y - by) * fy;
     n.w *= fx;
@@ -102,8 +105,14 @@ pub(crate) fn scale_subtree(n: &mut Node, bx: f64, by: f64, nx: f64, ny: f64, fx
         a.hx_out = nx + (a.hx_out - bx) * fx;
         a.hy_out = ny + (a.hy_out - by) * fy;
     }
-    for c in &mut n.children {
-        scale_subtree(c, bx, by, nx, ny, fx, fy);
+    if matches!(n.kind, NodeKind::Frame | NodeKind::Component) {
+        for c in &mut n.children {
+            shift_subtree(c, n.x - ox, n.y - oy);
+        }
+    } else {
+        for c in &mut n.children {
+            resize_subtree(c, bx, by, nx, ny, fx, fy);
+        }
     }
 }
 
